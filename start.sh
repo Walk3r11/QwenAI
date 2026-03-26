@@ -36,9 +36,10 @@ if [ -f "${MODEL_PATH}" ] && [ -f "${MMPROJ_PATH}" ]; then
     --mmproj "${MMPROJ_PATH}" \
     --host 127.0.0.1 \
     --port 8081 \
-    --ctx-size 4096 \
-    --batch-size 512 \
-    --parallel 1 &
+    --ctx-size 2048 \
+    --batch-size 256 \
+    --parallel 1 \
+    -ngl 0 &
 else
   echo "Model files missing — AI will not be available."
   echo "  qwen.gguf: $([ -f "${MODEL_PATH}" ] && echo 'OK' || echo 'MISSING')"
