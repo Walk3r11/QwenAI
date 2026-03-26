@@ -3,6 +3,7 @@ import os
 
 import requests
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 
 from config import ANALYZE_PROMPT, LLAMA_MODEL, LLAMA_URL
 from models import User
@@ -30,6 +31,7 @@ async def analyze(file: UploadFile = File(...), _: User = Depends(get_current_us
     data_url = f"data:{file.content_type};base64,{image_b64}"
     payload = {
         "model": LLAMA_MODEL,
+        "stream": True,
         "messages": [
             {
                 "role": "user",
@@ -43,10 +45,11 @@ async def analyze(file: UploadFile = File(...), _: User = Depends(get_current_us
     }
 
     try:
-        r = requests.post(LLAMA_URL, json=payload, timeout=180)
+        r = requests.post(LLAMA_URL, json=payload, timeout=600, stream=True)
     except requests.RequestException as e:
         raise HTTPException(status_code=502, detail=f"Failed to reach model server: {e}") from e
 
     if r.status_code >= 400:
         raise HTTPException(status_code=502, detail={"model_status": r.status_code, "body": r.text})
-    return r.json()
+
+    return StreamingResponse(r.iter_lines(decode_unicode=True), media_type="text/event-stream")
