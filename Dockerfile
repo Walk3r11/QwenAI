@@ -18,16 +18,11 @@ ENV MODEL_DIR=/models
 RUN mkdir -p "${MODEL_DIR}"
 WORKDIR "${MODEL_DIR}"
 
-ARG MODEL_URL=""
-ARG MMPROJ_URL=""
-
 WORKDIR /app
 COPY main.py /app/main.py
 COPY start.sh /app/start.sh
 RUN chmod +x /app/start.sh
 
-RUN if [ -n "${MODEL_URL}" ]; then wget -O qwen.gguf "${MODEL_URL}"; fi
-RUN if [ -n "${MMPROJ_URL}" ]; then wget -O mmproj.gguf "${MMPROJ_URL}"; fi
 
 ENV PORT=8000
 EXPOSE 8000
@@ -35,7 +30,7 @@ EXPOSE 8000
 ENV LLAMA_URL=http://127.0.0.1:8080/v1/chat/completions
 ENV LLAMA_MODEL=qwen2.5-vl
 
-ENV MODEL_URL="${MODEL_URL}"
-ENV MMPROJ_URL="${MMPROJ_URL}"
+ENV MODEL_URL=""
+ENV MMPROJ_URL=""
 
 CMD ["/app/start.sh"]
