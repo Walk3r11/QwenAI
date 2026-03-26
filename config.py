@@ -9,5 +9,15 @@ LLAMA_URL = os.getenv("LLAMA_URL", "http://127.0.0.1:8081/v1/chat/completions")
 LLAMA_MODEL = os.getenv("LLAMA_MODEL", "qwen2.5-vl")
 ANALYZE_PROMPT = os.getenv(
     "ANALYZE_PROMPT",
-    "Identify the food in this image. Be specific (dish name). Return JSON: {\"dish\": string, \"confidence\": 0-1, \"notes\": string}.",
+    "You are a zero-waste kitchen assistant. Carefully scan EVERY part of this image — "
+    "foreground, background, plates, containers, shelves. "
+    "List ALL visible food: meat, fish, dairy, bread, grains, pasta, noodles, fruits, vegetables, "
+    "sauces, drinks, spices, garnishes, leftovers, and condiments. "
+    "List each item ONCE. Estimate freshness. "
+    "Then suggest 1-2 recipes using the most items, prioritizing expiring food. Be concise. "
+    "Return ONLY valid JSON: "
+    '{\"items\": [{\"name\": str, \"freshness\": \"fresh\"|\"use-soon\"|\"expiring\", \"qty\": str}], '
+    '\"recipes\": [{\"name\": str, \"uses\": [str], \"extra\": [str], '
+    '\"steps\": [str], \"minutes\": int}], '
+    '\"tip\": str}',
 )

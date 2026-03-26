@@ -32,6 +32,9 @@ async def analyze(file: UploadFile = File(...), _: User = Depends(get_current_us
     payload = {
         "model": LLAMA_MODEL,
         "stream": True,
+        "max_tokens": 1024,
+        "temperature": 0.2,
+        "frequency_penalty": 0.5,
         "messages": [
             {
                 "role": "user",
@@ -41,7 +44,6 @@ async def analyze(file: UploadFile = File(...), _: User = Depends(get_current_us
                 ],
             }
         ],
-        "temperature": 0.2,
     }
 
     try:

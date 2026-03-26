@@ -20,7 +20,7 @@ fi
 
 if [ ! -f "${MMPROJ_PATH}" ] && [ -n "${MMPROJ_URL:-}" ]; then
   echo "Downloading mmproj.gguf from: ${MMPROJ_URL}"
-  if wget --max-redirect=5 -O "${MMPROJ_PATH}.tmp" "${MMPROJ_URL}" 2>&1; then
+  if wget -q --max-redirect=5 -O "${MMPROJ_PATH}.tmp" "${MMPROJ_URL}"; then
     mv "${MMPROJ_PATH}.tmp" "${MMPROJ_PATH}"
     echo "Downloaded mmproj.gguf."
   else

@@ -1,0 +1,13 @@
+models/
+*.gguf
+.git
+.gitignore
+.dockerignore
+.env
+.DS_Store
+Thumbs.db
+__pycache__
+*.pyc
+.venv
+test.jpg
+README.md
