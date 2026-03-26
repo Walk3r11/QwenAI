@@ -32,10 +32,29 @@ class AuthResponse(BaseModel):
     user: UserOut
 
 
-class FoodItem(BaseModel):
+class ScanItemOut(BaseModel):
+    id: int
     name: str
-    freshness: str
-    qty: str
+    qty: str = ""
+    freshness: str = "fresh"
+    confidence: float | None = None
+    source: str = "ai"
+    pantry_item_id: int | None = None
+
+    class Config:
+        from_attributes = True
+
+
+class ScanItemAddRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    qty: str = ""
+    freshness: str = "fresh"
+
+
+class ScanItemUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    qty: str | None = None
+    freshness: str | None = None
 
 
 class ScanRecipeOut(BaseModel):
@@ -55,31 +74,25 @@ class ScanRecipeOut(BaseModel):
 
 class ScanOut(BaseModel):
     id: int
-    items: list[FoodItem]
+    status: str
+    image_count: int
+    items: list[ScanItemOut]
     recipes: list[ScanRecipeOut]
-    tip: Optional[str] = None
-    has_image: bool
     created_at: datetime
 
     class Config:
         from_attributes = True
 
 
+class ConfirmResponse(BaseModel):
+    scan_id: int
+    pantry_items_created: int
+    recipes: list[ScanRecipeOut]
+    tip: str | None = None
+
+
 class RateRequest(BaseModel):
     rating: int = Field(ge=1, le=5)
-
-
-class ScanItemOut(BaseModel):
-    name: str
-    quantity: float | None = None
-    unit: str | None = None
-    confidence: float | None = None
-    expires_at: datetime | None = None
-
-
-class ImageScanResponse(BaseModel):
-    items: list[ScanItemOut] = []
-    raw: str | None = None
 
 
 class GroupCreateRequest(BaseModel):
@@ -136,7 +149,9 @@ class PantryItemOut(BaseModel):
     name: str
     quantity: int
     unit: str | None
+    freshness: str
     source: str
+    scan_id: int | None
     image_id: str | None
     created_at: datetime
     expires_at: datetime | None

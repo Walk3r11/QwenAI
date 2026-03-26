@@ -28,11 +28,11 @@ if ENABLE_AI:
 @app.on_event("startup")
 def on_startup():
     with engine.connect() as conn:
-        has_scan_id = conn.execute(
-            text("SELECT column_name FROM information_schema.columns "
-                 "WHERE table_name='scan_recipes' AND column_name='scan_id'")
+        has_scan_items = conn.execute(
+            text("SELECT table_name FROM information_schema.tables "
+                 "WHERE table_name='scan_items'")
         ).first()
-        if not has_scan_id:
+        if not has_scan_items:
             conn.execute(text("DROP TABLE IF EXISTS scan_recipes"))
             conn.execute(text("DROP TABLE IF EXISTS scans"))
             conn.commit()

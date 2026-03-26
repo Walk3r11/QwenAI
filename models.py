@@ -4,6 +4,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -53,19 +54,47 @@ class Scan(Base):
     user_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("users.id"), index=True, nullable=False
     )
-    image_thumbnail: Mapped[str] = mapped_column(Text, nullable=True)
-    image_mime: Mapped[str] = mapped_column(String(50), nullable=True)
-    items_json: Mapped[str] = mapped_column(Text, nullable=False)
-    tip: Mapped[str] = mapped_column(Text, nullable=True)
-    raw_response: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), default="draft", nullable=False
+    )
+    image_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    thumbnails_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_response: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
 
     user: Mapped[User] = relationship(back_populates="scans")
-    scan_recipes: Mapped[list[ScanRecipe]] = relationship(
+    items: Mapped[list[ScanItem]] = relationship(
         back_populates="scan", cascade="all, delete-orphan"
     )
+    recipes: Mapped[list[ScanRecipe]] = relationship(
+        back_populates="scan", cascade="all, delete-orphan"
+    )
+
+
+class ScanItem(Base):
+    __tablename__ = "scan_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    scan_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("scans.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    pantry_item_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("pantry_items.id", ondelete="SET NULL"), nullable=True
+    )
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    qty: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    freshness: Mapped[str] = mapped_column(String(32), default="fresh", nullable=False)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    source: Mapped[str] = mapped_column(
+        String(16), default="ai", nullable=False
+    )
+    created_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    scan: Mapped[Scan] = relationship(back_populates="items")
 
 
 class ScanRecipe(Base):
@@ -73,7 +102,7 @@ class ScanRecipe(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     scan_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("scans.id"), index=True, nullable=False
+        Integer, ForeignKey("scans.id", ondelete="CASCADE"), index=True, nullable=False
     )
     user_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("users.id"), index=True, nullable=False
@@ -82,13 +111,13 @@ class ScanRecipe(Base):
     uses_json: Mapped[str] = mapped_column(Text, nullable=False)
     extra_json: Mapped[str] = mapped_column(Text, nullable=False)
     steps_json: Mapped[str] = mapped_column(Text, nullable=False)
-    minutes: Mapped[int] = mapped_column(Integer, nullable=True)
-    rating: Mapped[int] = mapped_column(Integer, nullable=True)
+    minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rating: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
 
-    scan: Mapped[Scan] = relationship(back_populates="scan_recipes")
+    scan: Mapped[Scan] = relationship(back_populates="recipes")
 
 
 class Group(Base):
@@ -173,8 +202,14 @@ class PantryItem(Base):
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     quantity: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     unit: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    freshness: Mapped[str] = mapped_column(
+        String(32), default="fresh", nullable=False
+    )
     source: Mapped[str] = mapped_column(
         String(32), default="manual", nullable=False
+    )
+    scan_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("scans.id", ondelete="SET NULL"), nullable=True
     )
     image_id: Mapped[str | None] = mapped_column(
         String(64), nullable=True
