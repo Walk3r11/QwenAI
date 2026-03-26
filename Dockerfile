@@ -19,8 +19,7 @@ RUN mkdir -p "${MODEL_DIR}"
 WORKDIR "${MODEL_DIR}"
 
 WORKDIR /app
-COPY *.py /app/
-COPY start.sh /app/start.sh
+COPY . /app/
 RUN chmod +x /app/start.sh
 
 
