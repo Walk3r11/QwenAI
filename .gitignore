@@ -3,17 +3,6 @@ Thumbs.db
 
 __pycache__
 .venv
+*.pyc
 
 .env
-
-.gradle/
-build/
-out/
-*.class
-*.jar
-*.war
-
-.idea/
-*.iml
-*.iws
-*.ipr
