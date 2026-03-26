@@ -21,9 +21,6 @@ WORKDIR "${MODEL_DIR}"
 ENV MODEL_URL=""
 ENV MMPROJ_URL=""
 
-RUN if [ -n "${MODEL_URL}" ]; then wget -O qwen.gguf "${MODEL_URL}"; fi
-RUN if [ -n "${MMPROJ_URL}" ]; then wget -O mmproj.gguf "${MMPROJ_URL}"; fi
-
 WORKDIR /app
 COPY main.py /app/main.py
 
@@ -34,11 +31,15 @@ ENV LLAMA_URL=http://127.0.0.1:8080/v1/chat/completions
 ENV LLAMA_MODEL=qwen2.5-vl
 
 CMD bash -lc '\
-  /llama.cpp/build/bin/llama-server \
-    -m "${MODEL_DIR}/qwen.gguf" \
-    --mmproj "${MODEL_DIR}/mmproj.gguf" \
-    --host 127.0.0.1 \
-    --port 8080 \
-  & \
+  if [ ! -f "${MODEL_DIR}/qwen.gguf" ] && [ -n "${MODEL_URL}" ]; then wget -O "${MODEL_DIR}/qwen.gguf" "${MODEL_URL}"; fi; \
+  if [ ! -f "${MODEL_DIR}/mmproj.gguf" ] && [ -n "${MMPROJ_URL}" ]; then wget -O "${MODEL_DIR}/mmproj.gguf" "${MMPROJ_URL}"; fi; \
+  if [ -f "${MODEL_DIR}/qwen.gguf" ] && [ -f "${MODEL_DIR}/mmproj.gguf" ]; then \
+    /llama.cpp/build/bin/llama-server \
+      -m "${MODEL_DIR}/qwen.gguf" \
+      --mmproj "${MODEL_DIR}/mmproj.gguf" \
+      --host 127.0.0.1 \
+      --port 8080 \
+    & \
+  fi; \
   uvicorn main:app --host 0.0.0.0 --port "${PORT}" \
 '

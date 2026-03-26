@@ -16,11 +16,21 @@ PROMPT = os.getenv(
 
 @app.get("/health")
 def health():
-    return {"ok": True}
+    return {
+        "ok": True,
+        "model_file_present": os.path.exists("/models/qwen.gguf"),
+        "mmproj_file_present": os.path.exists("/models/mmproj.gguf"),
+    }
 
 
 @app.post("/analyze")
 async def analyze(file: UploadFile = File(...)):
+    if not os.path.exists("/models/qwen.gguf") or not os.path.exists("/models/mmproj.gguf"):
+        raise HTTPException(
+            status_code=503,
+            detail="Model files not found. Set MODEL_URL and MMPROJ_URL in Railway variables and redeploy.",
+        )
+
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=415, detail="Upload an image file.")
 
