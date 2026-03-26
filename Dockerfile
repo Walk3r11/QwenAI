@@ -27,7 +27,7 @@ RUN chmod +x /app/start.sh
 ENV PORT=8000
 EXPOSE 8000
 
-ENV LLAMA_URL=http://127.0.0.1:8080/v1/chat/completions
+ENV LLAMA_URL=http://127.0.0.1:8081/v1/chat/completions
 ENV LLAMA_MODEL=qwen2.5-vl
 
 ENV MODEL_URL=""
