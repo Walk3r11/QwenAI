@@ -5,7 +5,7 @@ from sqlalchemy import text
 
 from ai_routes import router as ai_router
 from auth_routes import router as auth_router
-from config import DATABASE_URL, JWT_SECRET
+from config import DATABASE_URL, JWT_SECRET, MODEL_DIR
 from db import Base, SessionLocal, engine
 import models
 
@@ -35,6 +35,6 @@ def health():
         "db_connected": db_ok,
         "using_neon": "neon.tech" in DATABASE_URL,
         "jwt_configured": bool(JWT_SECRET),
-        "model_file_present": os.path.exists("/models/qwen.gguf"),
-        "mmproj_file_present": os.path.exists("/models/mmproj.gguf"),
+        "model_file_present": os.path.exists(f"{MODEL_DIR}/qwen.gguf"),
+        "mmproj_file_present": os.path.exists(f"{MODEL_DIR}/mmproj.gguf"),
     }
