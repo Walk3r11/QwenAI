@@ -6,15 +6,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates git build-essential cmake python3 python3-pip wget \
   && rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install --no-cache-dir -r /tmp/requirements.txt || true
-
 WORKDIR /app
 COPY requirements.txt /app/requirements.txt
 RUN pip3 install --no-cache-dir -r /app/requirements.txt
 
 RUN git clone --depth 1 https://github.com/ggerganov/llama.cpp /llama.cpp
 WORKDIR /llama.cpp
-RUN make -j
+RUN cmake -B build && cmake --build build --config Release -j
 
 ENV MODEL_DIR=/models
 RUN mkdir -p "${MODEL_DIR}"
@@ -36,7 +34,7 @@ ENV LLAMA_URL=http://127.0.0.1:8080/v1/chat/completions
 ENV LLAMA_MODEL=qwen2.5-vl
 
 CMD bash -lc '\
-  /llama.cpp/llama-server \
+  /llama.cpp/build/bin/llama-server \
     -m "${MODEL_DIR}/qwen.gguf" \
     --mmproj "${MODEL_DIR}/mmproj.gguf" \
     --host 127.0.0.1 \
