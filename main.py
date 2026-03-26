@@ -3,16 +3,26 @@ import os
 from fastapi import FastAPI
 from sqlalchemy import text
 
-from ai_routes import router as ai_router
 from auth_routes import router as auth_router
-from config import DATABASE_URL, JWT_SECRET, MODEL_DIR
+from config import DATABASE_URL, ENABLE_AI, JWT_SECRET, MODEL_DIR
 from db import Base, SessionLocal, engine
 import models
+from groups_routes import router as groups_router
+from pantry_routes import router as pantry_router
+from recipes_routes import router as recipes_router
+from share_routes import router as share_router
 
 app = FastAPI(title="SnapChef Backend", version="1.0.0")
 
 app.include_router(auth_router)
-app.include_router(ai_router)
+app.include_router(groups_router)
+app.include_router(pantry_router)
+app.include_router(recipes_router)
+app.include_router(share_router)
+if ENABLE_AI:
+    from ai_routes import router as ai_router
+
+    app.include_router(ai_router)
 
 
 @app.on_event("startup")
@@ -20,10 +30,10 @@ def on_startup():
     with engine.connect() as conn:
         has_scan_id = conn.execute(
             text("SELECT column_name FROM information_schema.columns "
-                 "WHERE table_name='recipes' AND column_name='scan_id'")
+                 "WHERE table_name='scan_recipes' AND column_name='scan_id'")
         ).first()
         if not has_scan_id:
-            conn.execute(text("DROP TABLE IF EXISTS recipes"))
+            conn.execute(text("DROP TABLE IF EXISTS scan_recipes"))
             conn.execute(text("DROP TABLE IF EXISTS scans"))
             conn.commit()
     Base.metadata.create_all(bind=engine)
@@ -39,11 +49,21 @@ def health():
     except Exception:
         db_ok = False
 
+    model_present = os.path.exists(f"{MODEL_DIR}/qwen.gguf")
+    mmproj_present = os.path.exists(f"{MODEL_DIR}/mmproj.gguf")
+
     return {
         "ok": True,
         "db_connected": db_ok,
         "using_neon": "neon.tech" in DATABASE_URL,
         "jwt_configured": bool(JWT_SECRET),
-        "model_file_present": os.path.exists(f"{MODEL_DIR}/qwen.gguf"),
-        "mmproj_file_present": os.path.exists(f"{MODEL_DIR}/mmproj.gguf"),
+        "ai_enabled": ENABLE_AI,
+        "model_file_present": model_present if ENABLE_AI else None,
+        "mmproj_file_present": mmproj_present if ENABLE_AI else None,
     }
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
