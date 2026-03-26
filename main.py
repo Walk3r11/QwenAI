@@ -17,6 +17,15 @@ app.include_router(ai_router)
 
 @app.on_event("startup")
 def on_startup():
+    with engine.connect() as conn:
+        has_scan_id = conn.execute(
+            text("SELECT column_name FROM information_schema.columns "
+                 "WHERE table_name='recipes' AND column_name='scan_id'")
+        ).first()
+        if not has_scan_id:
+            conn.execute(text("DROP TABLE IF EXISTS recipes"))
+            conn.execute(text("DROP TABLE IF EXISTS scans"))
+            conn.commit()
     Base.metadata.create_all(bind=engine)
 
 

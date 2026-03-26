@@ -6,14 +6,15 @@ import re
 
 import requests
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import StreamingResponse
 from PIL import Image
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from config import ANALYZE_PROMPT, LLAMA_MODEL, LLAMA_URL, MODEL_DIR
-from db import get_db
+from db import SessionLocal, get_db
 from models import Recipe, Scan, User
-from schemas import AnalyzeResponse, FoodItem, RateRequest, RecipeOut, ScanOut
+from schemas import FoodItem, RateRequest, RecipeOut, ScanOut
 from security import get_current_user
 
 router = APIRouter(prefix="/ai", tags=["ai"])
@@ -55,11 +56,10 @@ def _parse_ai_json(raw: str) -> dict:
     return json.loads(text)
 
 
-@router.post("/analyze", response_model=AnalyzeResponse)
+@router.post("/analyze")
 async def analyze(
     file: UploadFile = File(...),
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
 ):
     if not os.path.exists(f"{MODEL_DIR}/qwen.gguf") or not os.path.exists(f"{MODEL_DIR}/mmproj.gguf"):
         raise HTTPException(
@@ -74,100 +74,141 @@ async def analyze(
     if not image_bytes:
         raise HTTPException(status_code=400, detail="Empty file.")
 
-    image_b64 = base64.b64encode(image_bytes).decode("ascii")
-    data_url = f"data:{file.content_type};base64,{image_b64}"
-    payload = {
-        "model": LLAMA_MODEL,
-        "stream": True,
-        "max_tokens": 1024,
-        "temperature": 0.2,
-        "frequency_penalty": 0.8,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": ANALYZE_PROMPT},
-                    {"type": "image_url", "image_url": {"url": data_url}},
-                ],
-            }
-        ],
-    }
+    mime = file.content_type
+    user_id = user.id
 
-    try:
-        r = requests.post(LLAMA_URL, json=payload, timeout=600, stream=True)
-    except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"Failed to reach model server: {e}") from e
+    def _stream():
+        yield json.dumps({"status": "processing"}) + "\n"
 
-    if r.status_code >= 400:
-        raise HTTPException(status_code=502, detail=f"Model error {r.status_code}: {r.text}")
+        image_b64 = base64.b64encode(image_bytes).decode("ascii")
+        data_url = f"data:{mime};base64,{image_b64}"
+        payload = {
+            "model": LLAMA_MODEL,
+            "stream": True,
+            "max_tokens": 1024,
+            "temperature": 0.2,
+            "frequency_penalty": 0.8,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": ANALYZE_PROMPT},
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                    ],
+                }
+            ],
+        }
 
-    raw_text = _collect_streamed(r)
-    if not raw_text:
-        raise HTTPException(status_code=502, detail="Empty response from model.")
+        try:
+            resp = requests.post(LLAMA_URL, json=payload, timeout=600, stream=True)
+        except requests.RequestException as e:
+            yield json.dumps({"status": "error", "detail": str(e)}) + "\n"
+            return
 
-    try:
-        parsed = _parse_ai_json(raw_text)
-    except (json.JSONDecodeError, ValueError):
-        raise HTTPException(status_code=502, detail={"message": "Model returned invalid JSON", "raw": raw_text})
+        if resp.status_code >= 400:
+            yield json.dumps({"status": "error", "detail": resp.text}) + "\n"
+            return
 
-    items = parsed.get("items", [])
-    tip = parsed.get("tip")
-    recipe_list = parsed.get("recipes", [])
+        chunks: list[str] = []
+        token_count = 0
+        for line in resp.iter_lines(decode_unicode=True):
+            if not line or not line.startswith("data: "):
+                continue
+            raw_payload = line[6:]
+            if raw_payload.strip() == "[DONE]":
+                break
+            try:
+                obj = json.loads(raw_payload)
+                delta = obj["choices"][0].get("delta", {})
+                content = delta.get("content")
+                if content:
+                    chunks.append(content)
+                    token_count += 1
+                    if token_count % 20 == 0:
+                        yield json.dumps({"status": "generating", "tokens": token_count}) + "\n"
+            except (json.JSONDecodeError, KeyError, IndexError):
+                continue
 
-    try:
-        thumb = _make_thumbnail(image_bytes, file.content_type)
-    except Exception:
-        thumb = None
+        raw_text = "".join(chunks)
+        if not raw_text:
+            yield json.dumps({"status": "error", "detail": "Empty response from model."}) + "\n"
+            return
 
-    scan = Scan(
-        user_id=user.id,
-        image_thumbnail=thumb,
-        image_mime=file.content_type,
-        items_json=json.dumps(items),
-        tip=tip,
-        raw_response=raw_text,
-    )
-    db.add(scan)
-    db.flush()
+        try:
+            parsed = _parse_ai_json(raw_text)
+        except (json.JSONDecodeError, ValueError):
+            yield json.dumps({"status": "error", "detail": "Invalid JSON from model", "raw": raw_text}) + "\n"
+            return
 
-    db_recipes = []
-    for r_data in recipe_list:
-        recipe = Recipe(
-            scan_id=scan.id,
-            user_id=user.id,
-            name=r_data.get("name", "Untitled"),
-            uses_json=json.dumps(r_data.get("uses", [])),
-            extra_json=json.dumps(r_data.get("extra", [])),
-            steps_json=json.dumps(r_data.get("steps", [])),
-            minutes=r_data.get("minutes"),
-        )
-        db.add(recipe)
-        db_recipes.append(recipe)
+        items = parsed.get("items", [])
+        tip = parsed.get("tip")
+        recipe_list = parsed.get("recipes", [])
 
-    db.commit()
-    db.refresh(scan)
-    for rec in db_recipes:
-        db.refresh(rec)
+        try:
+            thumb = _make_thumbnail(image_bytes, mime)
+        except Exception:
+            thumb = None
 
-    return AnalyzeResponse(
-        scan_id=scan.id,
-        items=[FoodItem(**i) for i in items],
-        recipes=[
-            RecipeOut(
-                id=rec.id,
-                scan_id=rec.scan_id,
-                name=rec.name,
-                uses=json.loads(rec.uses_json),
-                extra=json.loads(rec.extra_json),
-                steps=json.loads(rec.steps_json),
-                minutes=rec.minutes,
-                rating=rec.rating,
-                created_at=rec.created_at,
+        db = SessionLocal()
+        try:
+            scan = Scan(
+                user_id=user_id,
+                image_thumbnail=thumb,
+                image_mime=mime,
+                items_json=json.dumps(items),
+                tip=tip,
+                raw_response=raw_text,
             )
-            for rec in db_recipes
-        ],
-        tip=tip,
-    )
+            db.add(scan)
+            db.flush()
+
+            db_recipes = []
+            for r_data in recipe_list:
+                recipe = Recipe(
+                    scan_id=scan.id,
+                    user_id=user_id,
+                    name=r_data.get("name", "Untitled"),
+                    uses_json=json.dumps(r_data.get("uses", [])),
+                    extra_json=json.dumps(r_data.get("extra", [])),
+                    steps_json=json.dumps(r_data.get("steps", [])),
+                    minutes=r_data.get("minutes"),
+                )
+                db.add(recipe)
+                db_recipes.append(recipe)
+
+            db.commit()
+            db.refresh(scan)
+            for rec in db_recipes:
+                db.refresh(rec)
+
+            result = {
+                "status": "done",
+                "scan_id": scan.id,
+                "items": [FoodItem(**i).model_dump() for i in items],
+                "recipes": [
+                    RecipeOut(
+                        id=rec.id,
+                        scan_id=rec.scan_id,
+                        name=rec.name,
+                        uses=json.loads(rec.uses_json),
+                        extra=json.loads(rec.extra_json),
+                        steps=json.loads(rec.steps_json),
+                        minutes=rec.minutes,
+                        rating=rec.rating,
+                        created_at=rec.created_at,
+                    ).model_dump(mode="json")
+                    for rec in db_recipes
+                ],
+                "tip": tip,
+            }
+            yield json.dumps(result) + "\n"
+        except Exception as e:
+            db.rollback()
+            yield json.dumps({"status": "error", "detail": f"DB error: {e}"}) + "\n"
+        finally:
+            db.close()
+
+    return StreamingResponse(_stream(), media_type="application/x-ndjson")
 
 
 @router.get("/history", response_model=list[ScanOut])
