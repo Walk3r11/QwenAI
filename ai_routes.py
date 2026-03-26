@@ -100,7 +100,7 @@ async def analyze(
         }
 
         try:
-            resp = requests.post(LLAMA_URL, json=payload, timeout=600, stream=True)
+            resp = requests.post(LLAMA_URL, json=payload, timeout=60, stream=True)
         except requests.RequestException as e:
             yield json.dumps({"status": "error", "detail": str(e)}) + "\n"
             return
