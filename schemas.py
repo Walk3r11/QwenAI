@@ -120,3 +120,15 @@ class SharePostOut(BaseModel):
     note: str | None
     created_at: datetime
     items: list[PantryItemOut] = []
+
+
+class ScanItemOut(BaseModel):
+    name: str
+    quantity: float | None = None
+    unit: str | None = None
+    confidence: float | None = None
+
+
+class ImageScanResponse(BaseModel):
+    items: list[ScanItemOut] = []
+    raw: str | None = None
