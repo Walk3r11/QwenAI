@@ -34,8 +34,8 @@ class AuthResponse(BaseModel):
 
 class FoodItem(BaseModel):
     name: str
-    freshness: str
-    qty: str
+    freshness: str = "fresh"
+    qty: str = ""
 
 
 class ScanRecipeOut(BaseModel):
