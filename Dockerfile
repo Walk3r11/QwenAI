@@ -23,6 +23,8 @@ ENV MMPROJ_URL=""
 
 WORKDIR /app
 COPY main.py /app/main.py
+COPY start.sh /app/start.sh
+RUN chmod +x /app/start.sh
 
 ENV PORT=8000
 EXPOSE 8000
@@ -30,16 +32,4 @@ EXPOSE 8000
 ENV LLAMA_URL=http://127.0.0.1:8080/v1/chat/completions
 ENV LLAMA_MODEL=qwen2.5-vl
 
-CMD bash -lc '\
-  if [ ! -f "${MODEL_DIR}/qwen.gguf" ] && [ -n "${MODEL_URL}" ]; then wget -O "${MODEL_DIR}/qwen.gguf" "${MODEL_URL}"; fi; \
-  if [ ! -f "${MODEL_DIR}/mmproj.gguf" ] && [ -n "${MMPROJ_URL}" ]; then wget -O "${MODEL_DIR}/mmproj.gguf" "${MMPROJ_URL}"; fi; \
-  if [ -f "${MODEL_DIR}/qwen.gguf" ] && [ -f "${MODEL_DIR}/mmproj.gguf" ]; then \
-    /llama.cpp/build/bin/llama-server \
-      -m "${MODEL_DIR}/qwen.gguf" \
-      --mmproj "${MODEL_DIR}/mmproj.gguf" \
-      --host 127.0.0.1 \
-      --port 8080 \
-    & \
-  fi; \
-  uvicorn main:app --host 0.0.0.0 --port "${PORT}" \
-'
+CMD ["/app/start.sh"]
