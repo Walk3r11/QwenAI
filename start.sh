@@ -10,11 +10,15 @@ model_worker() {
   mkdir -p "${MODEL_DIR}"
 
   if [ ! -f "${MODEL_PATH}" ] && [ -n "${MODEL_URL:-}" ]; then
-    wget -O "${MODEL_PATH}" "${MODEL_URL}"
+    echo "Downloading qwen.gguf..."
+    wget -q -O "${MODEL_PATH}" "${MODEL_URL}"
+    echo "Downloaded qwen.gguf."
   fi
 
   if [ ! -f "${MMPROJ_PATH}" ] && [ -n "${MMPROJ_URL:-}" ]; then
-    wget -O "${MMPROJ_PATH}" "${MMPROJ_URL}"
+    echo "Downloading mmproj.gguf..."
+    wget -q -O "${MMPROJ_PATH}" "${MMPROJ_URL}"
+    echo "Downloaded mmproj.gguf."
   fi
 
   if [ -f "${MODEL_PATH}" ] && [ -f "${MMPROJ_PATH}" ]; then
