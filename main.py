@@ -1,66 +1,40 @@
-import base64
 import os
 
-import requests
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI
+from sqlalchemy import text
+
+from ai_routes import router as ai_router
+from auth_routes import router as auth_router
+from config import DATABASE_URL, JWT_SECRET
+from db import Base, SessionLocal, engine
+import models
 
 app = FastAPI(title="SnapChef Backend", version="1.0.0")
 
-LLAMA_URL = os.getenv("LLAMA_URL", "http://127.0.0.1:8080/v1/chat/completions")
-MODEL = os.getenv("LLAMA_MODEL", "qwen2.5-vl")
-PROMPT = os.getenv(
-    "ANALYZE_PROMPT",
-    "Identify the food in this image. Be specific (dish name). Return JSON: {\"dish\": string, \"confidence\": 0-1, \"notes\": string}.",
-)
+app.include_router(auth_router)
+app.include_router(ai_router)
+
+
+@app.on_event("startup")
+def on_startup():
+    Base.metadata.create_all(bind=engine)
 
 
 @app.get("/health")
 def health():
+    db_ok = False
+    try:
+        with SessionLocal() as db:
+            db.execute(text("SELECT 1"))
+            db_ok = True
+    except Exception:
+        db_ok = False
+
     return {
         "ok": True,
+        "db_connected": db_ok,
+        "using_neon": "neon.tech" in DATABASE_URL,
+        "jwt_configured": bool(JWT_SECRET),
         "model_file_present": os.path.exists("/models/qwen.gguf"),
         "mmproj_file_present": os.path.exists("/models/mmproj.gguf"),
     }
-
-
-@app.post("/analyze")
-async def analyze(file: UploadFile = File(...)):
-    if not os.path.exists("/models/qwen.gguf") or not os.path.exists("/models/mmproj.gguf"):
-        raise HTTPException(
-            status_code=503,
-            detail="Model files not found. Set MODEL_URL and MMPROJ_URL in Railway variables and redeploy.",
-        )
-
-    if not file.content_type or not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=415, detail="Upload an image file.")
-
-    image_bytes = await file.read()
-    if not image_bytes:
-        raise HTTPException(status_code=400, detail="Empty file.")
-
-    image_b64 = base64.b64encode(image_bytes).decode("ascii")
-    data_url = f"data:{file.content_type};base64,{image_b64}"
-
-    payload = {
-        "model": MODEL,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": PROMPT},
-                    {"type": "image_url", "image_url": {"url": data_url}},
-                ],
-            }
-        ],
-        "temperature": 0.2,
-    }
-
-    try:
-        r = requests.post(LLAMA_URL, json=payload, timeout=120)
-    except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"Failed to reach model server: {e}") from e
-
-    if r.status_code >= 400:
-        raise HTTPException(status_code=502, detail={"model_status": r.status_code, "body": r.text})
-
-    return r.json()

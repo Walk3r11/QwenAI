@@ -2,3 +2,8 @@ fastapi
 uvicorn[standard]
 requests
 python-multipart
+SQLAlchemy
+psycopg[binary]
+python-jose[cryptography]
+passlib[bcrypt]
+email-validator
