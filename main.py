@@ -7,10 +7,18 @@ from auth_routes import router as auth_router
 from config import DATABASE_URL, ENABLE_AI, JWT_SECRET
 from db import Base, SessionLocal, engine
 import models
+from groups_routes import router as groups_router
+from pantry_routes import router as pantry_router
+from recipes_routes import router as recipes_router
+from share_routes import router as share_router
 
 app = FastAPI(title="SnapChef Backend", version="1.0.0")
 
 app.include_router(auth_router)
+app.include_router(groups_router)
+app.include_router(pantry_router)
+app.include_router(recipes_router)
+app.include_router(share_router)
 if ENABLE_AI:
     from ai_routes import router as ai_router
 
