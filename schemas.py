@@ -127,6 +127,7 @@ class ScanItemOut(BaseModel):
     quantity: float | None = None
     unit: str | None = None
     confidence: float | None = None
+    expires_at: datetime | None = None
 
 
 class ImageScanResponse(BaseModel):

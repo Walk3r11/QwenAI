@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import re
+from datetime import datetime, timedelta, timezone
 
 import requests
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -14,6 +15,35 @@ from security import get_current_user
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
+_EXPIRY_HINTS_DAYS = {
+    "milk": 5,
+    "yogurt": 7,
+    "cream": 5,
+    "cheese": 10,
+    "egg": 14,
+    "chicken": 2,
+    "beef": 3,
+    "pork": 3,
+    "fish": 2,
+    "salmon": 2,
+    "shrimp": 2,
+    "turkey": 2,
+    "spinach": 4,
+    "lettuce": 5,
+    "tomato": 6,
+    "cucumber": 6,
+    "broccoli": 5,
+    "carrot": 12,
+    "potato": 21,
+    "onion": 21,
+    "apple": 14,
+    "banana": 4,
+    "strawberry": 3,
+    "bread": 4,
+    "rice": 180,
+    "pasta": 180,
+}
+
 
 def _extract_json_text(raw: str) -> str:
     raw = raw.strip()
@@ -25,6 +55,32 @@ def _extract_json_text(raw: str) -> str:
     raise ValueError("No JSON object found in model output.")
 
 
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _estimate_expires_in_days(name: str) -> int | None:
+    lowered = name.lower()
+    for key, days in _EXPIRY_HINTS_DAYS.items():
+        if key in lowered:
+            return days
+    return None
+
+
+def _to_float(value) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _coerce_scan_response(raw_text: str) -> ImageScanResponse:
     json_text = _extract_json_text(raw_text)
     payload = json.loads(json_text)
@@ -32,6 +88,7 @@ def _coerce_scan_response(raw_text: str) -> ImageScanResponse:
     if not isinstance(items, list):
         raise ValueError("Model output does not contain 'items' list.")
     parsed_items: list[ScanItemOut] = []
+    now = datetime.now(timezone.utc)
     for i in items:
         if not isinstance(i, dict):
             continue
@@ -41,16 +98,28 @@ def _coerce_scan_response(raw_text: str) -> ImageScanResponse:
         quantity = i.get("quantity")
         unit = i.get("unit")
         confidence = i.get("confidence")
+        expires_at = None
+        expires_at_raw = i.get("expires_at")
+        if expires_at_raw is not None:
+            try:
+                expires_at = _parse_iso_datetime(str(expires_at_raw))
+            except ValueError:
+                expires_at = None
+        if expires_at is None:
+            days = _estimate_expires_in_days(name)
+            if days is not None:
+                expires_at = now + timedelta(days=days)
         parsed_items.append(
             ScanItemOut(
                 name=name,
-                quantity=float(quantity) if quantity is not None else None,
+                quantity=_to_float(quantity),
                 unit=(
                     str(unit).strip()
                     if unit is not None and str(unit).strip()
                     else None
                 ),
-                confidence=float(confidence) if confidence is not None else None,
+                confidence=_to_float(confidence),
+                expires_at=expires_at,
             )
         )
     return ImageScanResponse(items=parsed_items, raw=raw_text)
@@ -128,7 +197,8 @@ async def scan_image(file: UploadFile = File(...), _: User = Depends(get_current
     data_url = f"data:{file.content_type};base64,{image_b64}"
     scan_prompt = (
         "Detect visible food ingredients from this image and return strict JSON only. "
-        'Output: {"items":[{"name":string,"quantity":number|null,"unit":string|null,"confidence":number|null}]}. '
+        'Output: {"items":[{"name":string,"quantity":number|null,"unit":string|null,"confidence":number|null,"expires_at":string|null}]}. '
+        "Set expires_at in ISO-8601 UTC format when possible. "
         "Use lowercase names. If uncertain, still include best guess with lower confidence."
     )
     payload = {
