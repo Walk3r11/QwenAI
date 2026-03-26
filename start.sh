@@ -19,12 +19,12 @@ if [ ! -f "${MODEL_PATH}" ] && [ -n "${MODEL_URL:-}" ]; then
 fi
 
 if [ ! -f "${MMPROJ_PATH}" ] && [ -n "${MMPROJ_URL:-}" ]; then
-  echo "Downloading mmproj.gguf..."
-  if wget -q -O "${MMPROJ_PATH}.tmp" "${MMPROJ_URL}"; then
+  echo "Downloading mmproj.gguf from: ${MMPROJ_URL}"
+  if wget --max-redirect=5 -O "${MMPROJ_PATH}.tmp" "${MMPROJ_URL}" 2>&1; then
     mv "${MMPROJ_PATH}.tmp" "${MMPROJ_PATH}"
     echo "Downloaded mmproj.gguf."
   else
-    echo "FAILED to download mmproj.gguf"
+    echo "FAILED to download mmproj.gguf (exit code: $?)"
     rm -f "${MMPROJ_PATH}.tmp"
   fi
 fi
