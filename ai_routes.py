@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from PIL import Image
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, selectinload
-from config import GROQ_RECIPE_USER_PROMPT, GROQ_SYSTEM_PROMPT, LLAMA_HTTP_TIMEOUT, LLAMA_MODEL, LLAMA_URL, MODEL_DIR, RECIPE_PROMPT, SCAN_PROMPT
+from config import GROQ_RECIPE_USER_PROMPT, GROQ_SYSTEM_PROMPT, LLAMA_HTTP_TIMEOUT, LLAMA_MODEL, LLAMA_URL, MODEL_DIR, RECIPE_PROMPT, SCAN_PROMPT, VISION_MAX_TOKENS
 from identification_data import KNOWN_IDENTIFICATION_CODES
 from db import SessionLocal, get_db
 from groq_client import groq_chat_json, groq_configured
@@ -100,6 +100,17 @@ def _training_thumbnail_b64(scan_thumb_b64: str, max_side: int = 384) -> str:
     except Exception:
         return scan_thumb_b64
 
+def _json_list_is_recipe_shape(val: list) -> bool:
+    if not val or not isinstance(val[0], dict):
+        return False
+    el0 = val[0]
+    if not str(el0.get('name') or '').strip():
+        return False
+    if 'freshness' in el0 or 'groups' in el0 or el0.get('confidence') is not None:
+        if 'steps' not in el0 and not (el0.get('uses') and 'minutes' in el0):
+            return False
+    return 'steps' in el0 or ('uses' in el0 and 'minutes' in el0)
+
 def _parse_ai_json(raw: str) -> dict:
     text = raw.strip()
     fence = re.search('```(?:json)?\\s*(.*?)```', text, re.DOTALL)
@@ -119,11 +130,73 @@ def _parse_ai_json(raw: str) -> dict:
         if isinstance(val, list):
             if not val or not isinstance(val[0], dict):
                 return {}
-            el0 = val[0]
-            if 'freshness' in el0:
-                return {'items': val, 'tip': ''}
-            return {'recipes': val}
-    return json.loads(text)
+            if _json_list_is_recipe_shape(val):
+                return {'recipes': val, 'tip': ''}
+            return {'items': val, 'tip': ''}
+    tail = json.loads(text)
+    if isinstance(tail, list) and tail and isinstance(tail[0], dict):
+        if _json_list_is_recipe_shape(tail):
+            return {'recipes': tail, 'tip': ''}
+        return {'items': tail, 'tip': ''}
+    if isinstance(tail, dict):
+        return tail
+    return {}
+
+def _normalize_scan_item_row(d: dict) -> dict | None:
+    if not isinstance(d, dict):
+        return None
+    name = d.get('name') or d.get('item') or d.get('food') or d.get('product') or d.get('label') or d.get('ingredient')
+    name = str(name or '').strip()
+    if not name:
+        return None
+    out = dict(d)
+    out['name'] = name
+    return out
+
+def _scan_item_entries_from_parsed(parsed) -> list[dict]:
+    if isinstance(parsed, list):
+        rows = [_normalize_scan_item_row(x) for x in parsed if isinstance(x, dict)]
+        return [x for x in rows if x]
+    if not isinstance(parsed, dict):
+        return []
+    for key in ('items', 'Items', 'food_items', 'foods', 'detected_items', 'ingredients', 'products', 'inventory', 'pantry_items', 'scanned_items', 'results', 'detections'):
+        v = parsed.get(key)
+        if isinstance(v, list):
+            rows = [_normalize_scan_item_row(x) for x in v if isinstance(x, dict)]
+            rows = [x for x in rows if x]
+            if rows:
+                return rows
+    one = parsed.get('item')
+    if isinstance(one, dict):
+        r = _normalize_scan_item_row(one)
+        return [r] if r else []
+    for nest in ('data', 'result', 'output', 'response', 'scan', 'content', 'analysis', 'payload'):
+        inner = parsed.get(nest)
+        if isinstance(inner, dict):
+            got = _scan_item_entries_from_parsed(inner)
+            if got:
+                return got
+        if isinstance(inner, list) and inner and isinstance(inner[0], dict):
+            rows = [_normalize_scan_item_row(x) for x in inner if isinstance(x, dict)]
+            rows = [x for x in rows if x]
+            if rows:
+                return rows
+    recipes = parsed.get('recipes')
+    if isinstance(recipes, list) and recipes and isinstance(recipes[0], dict):
+        if not _json_list_is_recipe_shape(recipes):
+            rows = [_normalize_scan_item_row(x) for x in recipes if isinstance(x, dict)]
+            rows = [x for x in rows if x]
+            if rows:
+                return rows
+    return []
+
+def _extract_scan_items_for_session(parsed) -> list[dict]:
+    if isinstance(parsed, list):
+        if _json_list_is_recipe_shape(parsed):
+            return []
+        rows = [_normalize_scan_item_row(x) for x in parsed if isinstance(x, dict)]
+        return [x for x in rows if x]
+    return _scan_item_entries_from_parsed(parsed)
 
 def _recipe_entries_from_parsed(parsed) -> list[dict]:
     if isinstance(parsed, list):
@@ -360,7 +433,7 @@ async def create_session(files: List[UploadFile]=File(...), buffer: bool=Query(F
         except (json.JSONDecodeError, ValueError):
             yield (json.dumps({'status': 'error', 'detail': 'Invalid JSON from model', 'raw': raw_text}) + '\n')
             return
-        ai_items = parsed.get('items', [])
+        ai_items = _extract_scan_items_for_session(parsed)
         tip = parsed.get('tip')
         db = SessionLocal()
         try:

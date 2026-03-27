@@ -1,6 +1,6 @@
 import json
 import pytest
-from ai_routes import _clamp_freshness, _freshness_alert, _freshness_label, _parse_ai_json, _recipe_entries_from_parsed
+from ai_routes import _clamp_freshness, _extract_scan_items_for_session, _freshness_alert, _freshness_label, _parse_ai_json, _recipe_entries_from_parsed
 
 @pytest.mark.parametrize('raw,expected', [('{"items":[]}', {'items': []}), ('```json\n{"a":1}\n```', {'a': 1})])
 def test_parse_ai_json(raw, expected):
@@ -16,6 +16,21 @@ def test_parse_ai_json_top_level_recipe_list():
     out = _parse_ai_json(raw)
     assert 'recipes' in out
     assert out['recipes'][0]['name'] == 'Soup'
+
+def test_parse_ai_json_top_level_scan_list_without_freshness():
+    raw = '[{"name": "apple", "qty": "1"}]'
+    out = _parse_ai_json(raw)
+    assert out.get('items') and out['items'][0]['name'] == 'apple'
+    assert 'recipes' not in out or not out.get('recipes')
+
+def test_extract_scan_items_alternate_keys_and_food_alias():
+    assert _extract_scan_items_for_session({'foods': [{'food': 'Banana', 'qty': '2'}]})[0]['name'] == 'Banana'
+    assert _extract_scan_items_for_session({'data': {'detected_items': [{'product': 'Milk', 'freshness': 8}]}})[0]['name'] == 'Milk'
+
+def test_extract_scan_items_misrouted_recipes_array():
+    parsed = {'recipes': [{'name': 'Tomato', 'qty': '3', 'freshness': 7}]}
+    rows = _extract_scan_items_for_session(parsed)
+    assert len(rows) == 1 and rows[0]['name'] == 'Tomato'
 
 def test_recipe_entries_alternate_keys():
     assert len(_recipe_entries_from_parsed({'Recipes': [{'name': 'A', 'uses': []}]})) == 1
