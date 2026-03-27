@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 from PIL import Image
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, selectinload
-from config import GROQ_RECIPE_USER_PROMPT, GROQ_SYSTEM_PROMPT, LLAMA_MODEL, LLAMA_URL, MODEL_DIR, RECIPE_PROMPT, SCAN_PROMPT
+from config import GROQ_RECIPE_USER_PROMPT, GROQ_SYSTEM_PROMPT, LLAMA_HTTP_TIMEOUT, LLAMA_MODEL, LLAMA_URL, MODEL_DIR, RECIPE_PROMPT, SCAN_PROMPT
 from identification_data import KNOWN_IDENTIFICATION_CODES
 from db import SessionLocal, get_db
 from groq_client import groq_chat_json, groq_configured
@@ -316,7 +316,7 @@ async def create_session(files: List[UploadFile]=File(...), user: User=Depends(g
             content_parts.append({'type': 'image_url', 'image_url': {'url': data_url}})
         payload = {'model': LLAMA_MODEL, 'stream': True, 'max_tokens': 1024, 'temperature': 0.2, 'frequency_penalty': 0.8, 'messages': [{'role': 'user', 'content': content_parts}]}
         try:
-            resp = requests.post(LLAMA_URL, json=payload, timeout=120, stream=True)
+            resp = requests.post(LLAMA_URL, json=payload, timeout=LLAMA_HTTP_TIMEOUT, stream=True)
         except requests.RequestException as e:
             yield (json.dumps({'status': 'error', 'detail': str(e)}) + '\n')
             return
@@ -494,7 +494,7 @@ def generate_recipes(session_id: int, user: User=Depends(get_current_user), db: 
         prompt = f'{RECIPE_PROMPT}\n\nAvailable items: {items_text}'
         payload = {'model': LLAMA_MODEL, 'stream': True, 'max_tokens': 1024, 'temperature': 0.3, 'frequency_penalty': 0.6, 'messages': [{'role': 'user', 'content': prompt}]}
         try:
-            resp = requests.post(LLAMA_URL, json=payload, timeout=120, stream=True)
+            resp = requests.post(LLAMA_URL, json=payload, timeout=LLAMA_HTTP_TIMEOUT, stream=True)
         except requests.RequestException as e:
             yield (json.dumps({'status': 'error', 'detail': str(e)}) + '\n')
             return
