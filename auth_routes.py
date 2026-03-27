@@ -72,7 +72,6 @@ def signup(payload: SignupRequest, background_tasks: BackgroundTasks, db: Sessio
         existing.hashed_password = hash_password(payload.password)
         existing.verification_code = code
         db.commit()
-        # Do not block the HTTP response on SMTP (can take 2+ min on Railway; clients time out).
         background_tasks.add_task(send_verification_email, existing.email, existing.name, code)
         return SignupResponse(message='Verification email resent.', email=existing.email)
     user = User(email=em, name=payload.name.strip(), hashed_password=hash_password(payload.password), verification_code=None if instant else code, is_verified=bool(instant))
