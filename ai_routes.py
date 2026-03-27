@@ -53,6 +53,32 @@ def _make_thumbnail(image_bytes: bytes, mime: str) -> str:
     img.save(buf, format=fmt)
     return base64.b64encode(buf.getvalue()).decode('ascii')
 
+def _pantry_quantity_from_qty(qty: str | None) -> int:
+    raw = (qty or '').strip() or '1'
+    raw = raw.replace(',', '.').split()[0]
+    try:
+        return max(1, int(float(raw)))
+    except (TypeError, ValueError):
+        return 1
+
+def _training_thumbnail_b64(scan_thumb_b64: str, max_side: int = 384) -> str:
+    if not scan_thumb_b64:
+        return scan_thumb_b64
+    try:
+        raw = base64.b64decode(scan_thumb_b64, validate=True)
+    except Exception:
+        return scan_thumb_b64
+    try:
+        img = Image.open(io.BytesIO(raw))
+        if img.mode not in ('RGB', 'RGBA'):
+            img = img.convert('RGB')
+        img.thumbnail((max_side, max_side))
+        buf = io.BytesIO()
+        img.save(buf, format='JPEG', quality=82)
+        return base64.b64encode(buf.getvalue()).decode('ascii')
+    except Exception:
+        return scan_thumb_b64
+
 def _parse_ai_json(raw: str) -> dict:
     text = raw.strip()
     fence = re.search('```(?:json)?\\s*(.*?)```', text, re.DOTALL)
@@ -431,11 +457,14 @@ def confirm_session(session_id: int, user: User=Depends(get_current_user), db: S
     if not session.items:
         raise HTTPException(status_code=400, detail='No items to confirm.')
     for scan_item in session.items:
-        pantry = PantryItem(user_id=user.id, session_id=session.id, name=scan_item.name, freshness=scan_item.freshness, quantity=max(1, int(float(scan_item.qty or '1'))), unit=scan_item.unit, source='scan', expires_at=_estimate_expires(scan_item.name))
+        pantry = PantryItem(user_id=user.id, session_id=session.id, name=scan_item.name, freshness=scan_item.freshness, quantity=_pantry_quantity_from_qty(scan_item.qty), unit=scan_item.unit, source='scan', expires_at=_estimate_expires(scan_item.name))
         db.add(pantry)
     for img in session.images:
+        if not img.thumbnail:
+            continue
+        train_b64 = _training_thumbnail_b64(img.thumbnail)
         for scan_item in session.items:
-            db.add(TrainingImage(user_id=user.id, session_id=session.id, product_name=scan_item.name.strip().lower(), freshness=scan_item.freshness, image_data=img.thumbnail, mime=img.mime, verified=True))
+            db.add(TrainingImage(user_id=user.id, session_id=session.id, product_name=scan_item.name.strip().lower(), freshness=scan_item.freshness, image_data=train_b64, mime='image/jpeg', verified=True))
     _update_freshness_refs(db, [{'name': item.name, 'freshness': item.freshness} for item in session.items])
     session.status = 'confirmed'
     db.commit()

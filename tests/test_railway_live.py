@@ -82,3 +82,49 @@ def test_railway_ai_session_stream(bearer_token):
     assert last.get('status_msg') == 'done', f'Unexpected final payload: {last!r}'
     assert 'id' in last
     assert 'items' in last
+
+@pytest.mark.live_railway
+def test_railway_food_categories_then_groq_recipes(bearer_token):
+    """Vision scan → items with identification_groups (or manual fallback) → confirm → Groq recipes."""
+    headers = {'Authorization': f'Bearer {bearer_token}'}
+    img, mime = _test_image_file()
+    ext = 'jpg' if 'jpeg' in mime else 'png'
+    files = {'files': (f'scan.{ext}', img, mime)}
+    timeout = httpx.Timeout(600.0, connect=30.0)
+    lines: list[str] = []
+    with httpx.Client(base_url=BASE, timeout=timeout) as client:
+        with client.stream('POST', '/ai/sessions', headers=headers, files=files) as resp:
+            assert resp.status_code == 200, f'HTTP {resp.status_code} {resp.text[:500]}'
+            for chunk in resp.iter_bytes():
+                lines.append(chunk.decode('utf-8', errors='replace'))
+    text = ''.join(lines)
+    parsed_lines = [ln for ln in text.split('\n') if ln.strip()]
+    last = json.loads(parsed_lines[-1])
+    assert last.get('status_msg') == 'done', last
+    sid = last['id']
+
+    with httpx.Client(base_url=BASE, timeout=timeout) as client:
+        r = client.get(f'/ai/sessions/{sid}', headers=headers)
+        assert r.status_code == 200
+        sess = r.json()
+        if not sess.get('items'):
+            body = {'name': 'Test tomato', 'freshness': 7, 'qty': '3', 'unit': None, 'identification_group_codes': ['produce']}
+            r2 = client.post(f'/ai/sessions/{sid}/items', headers=headers, json=body)
+            assert r2.status_code == 201, r2.text
+            r = client.get(f'/ai/sessions/{sid}', headers=headers)
+            sess = r.json()
+        assert sess.get('items'), 'Expected at least one item after vision or fallback'
+        for it in sess['items']:
+            assert 'name' in it
+            assert 'identification_groups' in it
+            for g in it['identification_groups']:
+                assert g.get('code') in {'dairy', 'protein', 'produce', 'pantry', 'all'}
+
+        r3 = client.post(f'/ai/sessions/{sid}/confirm', headers=headers)
+        assert r3.status_code == 200, r3.text
+
+        r4 = client.post(f'/ai/sessions/{sid}/groq-recipes', headers=headers)
+        assert r4.status_code == 200, r4.text
+        out = r4.json()
+        assert out.get('recipes'), out
+        assert all((rec.get('name') for rec in out['recipes']))

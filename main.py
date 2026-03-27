@@ -20,6 +20,56 @@ if ENABLE_AI:
     from ai_routes import router as ai_router
     app.include_router(ai_router)
 
+
+def _pg_table_columns(conn, table: str) -> set[str]:
+    rows = conn.execute(
+        text(
+            'SELECT column_name FROM information_schema.columns '
+            "WHERE table_schema = 'public' AND table_name = :t"
+        ),
+        {'t': table},
+    ).fetchall()
+    return {r[0] for r in rows}
+
+
+def _upgrade_pantry_items_postgres(conn) -> None:
+    if not conn.execute(
+        text("SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'pantry_items'")
+    ).first():
+        return
+    cols = _pg_table_columns(conn, 'pantry_items')
+    if 'session_id' not in cols:
+        conn.execute(text('ALTER TABLE pantry_items ADD COLUMN session_id INTEGER'))
+    if 'freshness' not in cols:
+        conn.execute(text('ALTER TABLE pantry_items ADD COLUMN freshness INTEGER'))
+        conn.execute(text('UPDATE pantry_items SET freshness = 8 WHERE freshness IS NULL'))
+        conn.execute(text('ALTER TABLE pantry_items ALTER COLUMN freshness SET DEFAULT 8'))
+        conn.execute(text('ALTER TABLE pantry_items ALTER COLUMN freshness SET NOT NULL'))
+    if 'expires_at' not in cols:
+        conn.execute(text('ALTER TABLE pantry_items ADD COLUMN expires_at TIMESTAMP WITH TIME ZONE'))
+    if 'image_id' not in cols:
+        conn.execute(text('ALTER TABLE pantry_items ADD COLUMN image_id VARCHAR(64)'))
+    conn.commit()
+    fk = conn.execute(
+        text(
+            "SELECT 1 FROM information_schema.table_constraints WHERE table_schema = 'public' "
+            "AND table_name = 'pantry_items' AND constraint_type = 'FOREIGN KEY' "
+            "AND constraint_name = 'pantry_items_session_id_fkey'"
+        )
+    ).first()
+    if not fk:
+        try:
+            conn.execute(
+                text(
+                    'ALTER TABLE pantry_items ADD CONSTRAINT pantry_items_session_id_fkey '
+                    'FOREIGN KEY (session_id) REFERENCES scan_sessions(id) ON DELETE SET NULL'
+                )
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+
+
 @app.on_event('startup')
 def on_startup():
     if engine.dialect.name == 'postgresql':
@@ -36,6 +86,9 @@ def on_startup():
                         conn.execute(text(f'DROP TABLE IF EXISTS {tbl} CASCADE'))
                     conn.commit()
     Base.metadata.create_all(bind=engine)
+    if engine.dialect.name == 'postgresql':
+        with engine.connect() as conn:
+            _upgrade_pantry_items_postgres(conn)
     with SessionLocal() as db:
         from identification_seed import ensure_identification_groups
         try:
