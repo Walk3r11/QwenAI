@@ -82,68 +82,51 @@ def get_token(base: str, email: str | None, password: str | None) -> str:
 SCAN_TIMEOUT = (60, int(os.environ.get('RAILWAY_SCAN_READ_TIMEOUT', '86400')))
 
 
-def stream_scan(base: str, token: str, paths: list[Path], chunked: bool=False) -> dict:
+def stream_scan(base: str, token: str, paths: list[Path]) -> dict:
+    """POST /ai/sessions returns NDJSON; first line arrives immediately (avoids Railway first-byte timeout)."""
     headers = {'Authorization': f'Bearer {token}'}
     files = []
     for p in paths:
         files.append(
             ('files', (p.name, p.read_bytes(), mime_for(p))),
         )
-    if not chunked:
-        print('POST /ai/sessions?buffer=true (one JSON when done — avoids Railway cutting chunked streams)…', file=sys.stderr)
-        r = requests.post(
-            f'{base}/ai/sessions',
-            params={'buffer': 'true'},
-            headers=headers,
-            files=files,
-            timeout=SCAN_TIMEOUT,
-        )
-        if r.status_code != 200:
-            print(f'Scan HTTP {r.status_code}: {r.text[:1200]}', file=sys.stderr)
-            sys.exit(1)
+    print('POST /ai/sessions (NDJSON stream; first bytes immediate — use long RAILWAY_SCAN_READ_TIMEOUT if needed)…', file=sys.stderr)
+    r = requests.post(
+        f'{base}/ai/sessions',
+        headers=headers,
+        files=files,
+        stream=True,
+        timeout=SCAN_TIMEOUT,
+    )
+    if r.status_code != 200:
+        print(f'Scan HTTP {r.status_code}: {r.text[:1200]}', file=sys.stderr)
+        sys.exit(1)
+    buf = []
+    got = 0
+    try:
+        for chunk in r.iter_content(chunk_size=65536):
+            if chunk:
+                got += len(chunk)
+                if got <= 65536:
+                    print(f'  stream… {got} bytes', file=sys.stderr)
+                buf.append(chunk.decode('utf-8', errors='replace'))
+    except requests.exceptions.ChunkedEncodingError as e:
+        print(f'Chunked stream cut off (proxy idle/total timeout?): {e}', file=sys.stderr)
+        print('Try raising RAILWAY_SCAN_READ_TIMEOUT or reduce image count/size.', file=sys.stderr)
+        sys.exit(1)
+    text = ''.join(buf)
+    lines = [ln for ln in text.split('\n') if ln.strip()]
+    if not lines:
+        print('Empty stream from /ai/sessions', file=sys.stderr)
+        sys.exit(1)
+    for ln in lines[:-1]:
         try:
-            last = r.json()
+            o = json.loads(ln)
+            if o.get('status') == 'error':
+                print(f'  NDJSON error line: {o}', file=sys.stderr)
         except json.JSONDecodeError:
-            print(f'Not JSON: {r.text[:800]}', file=sys.stderr)
-            sys.exit(1)
-    else:
-        print('POST /ai/sessions (NDJSON stream; may break behind proxies)…', file=sys.stderr)
-        r = requests.post(
-            f'{base}/ai/sessions',
-            headers=headers,
-            files=files,
-            stream=True,
-            timeout=SCAN_TIMEOUT,
-        )
-        if r.status_code != 200:
-            print(f'Scan HTTP {r.status_code}: {r.text[:800]}', file=sys.stderr)
-            sys.exit(1)
-        buf = []
-        got = 0
-        try:
-            for chunk in r.iter_content(chunk_size=65536):
-                if chunk:
-                    got += len(chunk)
-                    if got <= 65536:
-                        print(f'  stream… {got} bytes', file=sys.stderr)
-                    buf.append(chunk.decode('utf-8', errors='replace'))
-        except requests.exceptions.ChunkedEncodingError as e:
-            print(f'Chunked stream cut off (proxy timeout?): {e}', file=sys.stderr)
-            print('Retry without --chunked-stream (default uses ?buffer=true).', file=sys.stderr)
-            sys.exit(1)
-        text = ''.join(buf)
-        lines = [ln for ln in text.split('\n') if ln.strip()]
-        if not lines:
-            print('Empty stream from /ai/sessions', file=sys.stderr)
-            sys.exit(1)
-        for ln in lines[:-1]:
-            try:
-                o = json.loads(ln)
-                if o.get('status') == 'error':
-                    print(f'  NDJSON error line: {o}', file=sys.stderr)
-            except json.JSONDecodeError:
-                pass
-        last = json.loads(lines[-1])
+            pass
+    last = json.loads(lines[-1])
     if last.get('status') == 'error' or last.get('status_msg') not in (None, 'done'):
         print(f'Vision pipeline did not finish OK: {last}', file=sys.stderr)
         sys.exit(1)
@@ -194,7 +177,6 @@ def main() -> None:
     ap.add_argument('--max', type=int, default=10, help='max images (default 10)')
     ap.add_argument('--no-full', action='store_true', help='only run vision scan JSON to stdout')
     ap.add_argument('--strict-vision', action='store_true', help='do not add manual items if vision is empty')
-    ap.add_argument('--chunked-stream', action='store_true', help='use NDJSON stream instead of buffer=true (often fails on Railway)')
     args = ap.parse_args()
     full = not args.no_full
 
@@ -208,7 +190,7 @@ def main() -> None:
         os.environ.get('RAILWAY_PASSWORD'),
     )
 
-    data = stream_scan(base, token, paths, chunked=args.chunked_stream)
+    data = stream_scan(base, token, paths)
     sid = data.get('id')
     if not sid:
         print(json.dumps(data, indent=2))

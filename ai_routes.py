@@ -1,4 +1,3 @@
-import asyncio
 import base64
 import io
 import json
@@ -9,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import List, cast
 import requests
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from PIL import Image
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, selectinload
@@ -371,7 +370,7 @@ def _session_to_out(session: ScanSession) -> ScanSessionOut:
 MAX_SCAN_UPLOADS = 50
 
 @router.post('/sessions')
-async def create_session(files: List[UploadFile]=File(...), buffer: bool=Query(False, description='If true, return one JSON when the scan finishes (avoids long-lived chunked streams through proxies).'), user: User=Depends(get_current_user)):
+async def create_session(files: List[UploadFile]=File(...), user: User=Depends(get_current_user)):
     if not _model_ready():
         raise HTTPException(status_code=503, detail='Model files not ready.')
     if len(files) < 1 or len(files) > MAX_SCAN_UPLOADS:
@@ -466,24 +465,6 @@ async def create_session(files: List[UploadFile]=File(...), buffer: bool=Query(F
             yield (json.dumps({'status': 'error', 'detail': f'DB error: {e}'}) + '\n')
         finally:
             db.close()
-    if buffer:
-
-        def _drain():
-            return list(_stream())
-
-        chunks = await asyncio.to_thread(_drain)
-        if not chunks:
-            raise HTTPException(status_code=502, detail='Scan produced no output.')
-        last_raw = chunks[-1].strip()
-        try:
-            data = json.loads(last_raw)
-        except json.JSONDecodeError:
-            raise HTTPException(status_code=502, detail=f'Invalid final JSON: {last_raw[:400]}') from None
-        if data.get('status') == 'error':
-            raise HTTPException(status_code=502, detail=str(data.get('detail', data)))
-        if data.get('status_msg') != 'done' or data.get('id') is None:
-            raise HTTPException(status_code=502, detail=data)
-        return JSONResponse(content=data)
     return StreamingResponse(_stream(), media_type='application/x-ndjson')
 
 @router.get('/sessions', response_model=list[ScanSessionOut])
