@@ -1,5 +1,6 @@
 fastapi
 uvicorn[standard]
+python-dotenv
 requests
 python-multipart
 SQLAlchemy
@@ -8,3 +9,5 @@ python-jose[cryptography]
 bcrypt
 email-validator
 Pillow
+
+# Dev/tests + IDE stubs: pip install -r requirements-dev.txt

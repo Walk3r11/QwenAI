@@ -1,0 +1,42 @@
+import json
+import pytest
+from ai_routes import _clamp_freshness, _freshness_alert, _freshness_label, _parse_ai_json, _recipe_entries_from_parsed
+
+@pytest.mark.parametrize('raw,expected', [('{"items":[]}', {'items': []}), ('```json\n{"a":1}\n```', {'a': 1})])
+def test_parse_ai_json(raw, expected):
+    assert _parse_ai_json(raw) == expected
+
+def test_parse_ai_json_trailing_noise():
+    raw = 'Sure — here you go:\n{"items": [{"name": "x", "freshness": 8, "qty": "1"}]}\nHope this helps!'
+    out = _parse_ai_json(raw)
+    assert out['items'][0]['name'] == 'x'
+
+def test_parse_ai_json_top_level_recipe_list():
+    raw = '[{"name": "Soup", "uses": ["a"], "extra": [], "steps": ["mix"], "minutes": 10}]'
+    out = _parse_ai_json(raw)
+    assert 'recipes' in out
+    assert out['recipes'][0]['name'] == 'Soup'
+
+def test_recipe_entries_alternate_keys():
+    assert len(_recipe_entries_from_parsed({'Recipes': [{'name': 'A', 'uses': []}]})) == 1
+    assert _recipe_entries_from_parsed({'recipe': {'name': 'B', 'steps': ['x']}})[0]['name'] == 'B'
+    assert _recipe_entries_from_parsed({'data': {'recipes': [{'name': 'C'}]}})[0]['name'] == 'C'
+
+def test_clamp_freshness():
+    assert _clamp_freshness(5) == 5
+    assert _clamp_freshness(0) == 1
+    assert _clamp_freshness(15) == 10
+    assert _clamp_freshness('8') == 8
+    assert _clamp_freshness(None) == 8
+
+def test_freshness_alert():
+    assert _freshness_alert(10) is None
+    assert _freshness_alert(7) is None
+    assert 'soon' in (_freshness_alert(5) or '').lower()
+    assert 'WARNING' in (_freshness_alert(2) or '')
+    assert 'SPOILED' in (_freshness_alert(1) or '')
+
+def test_freshness_label():
+    assert _freshness_label(9.0) == 'fresh'
+    assert _freshness_label(6.5) == 'good'
+    assert _freshness_label(4.0) == 'use-soon'

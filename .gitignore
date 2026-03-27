@@ -10,4 +10,6 @@ __pycache__
 models/
 *.gguf
 test.jpg
+test_images/
+local_ai_e2e.db
 app.db
