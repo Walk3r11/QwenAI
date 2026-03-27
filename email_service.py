@@ -36,7 +36,10 @@ def send_verification_email(to_email: str, name: str, code: str):
         msg["To"] = to_email
         msg.attach(MIMEText(html_content, "html"))
 
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
             try:
                 server.login(smtp_email, smtp_password)
             except smtplib.SMTPAuthenticationError as e:
