@@ -31,6 +31,15 @@ class AuthResponse(BaseModel):
     user: UserOut
 
 
+class UpdateProfileRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=8, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
 class GroupCreateRequest(BaseModel):
     name: str = Field(min_length=2, max_length=120)
 
