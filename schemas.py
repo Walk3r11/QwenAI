@@ -142,3 +142,26 @@ class ScanItemOut(BaseModel):
 class ImageScanResponse(BaseModel):
     items: list[ScanItemOut] = []
     raw: str | None = None
+
+
+class LegacyIngredientAnalysisRequest(BaseModel):
+    imageBase64: str = Field(min_length=8)
+
+
+class LegacyIngredientAnalysisResponse(BaseModel):
+    ingredients: list[str]
+
+
+class LegacyRecipeGenerationRequest(BaseModel):
+    ingredients: list[str] = Field(default_factory=list, max_length=100)
+
+
+class LegacyRecipeOut(BaseModel):
+    id: str
+    title: str
+    instructions: list[str]
+    imageUrl: str | None = None
+
+
+class LegacyRecipeResponse(BaseModel):
+    recipes: list[LegacyRecipeOut]

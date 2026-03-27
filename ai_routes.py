@@ -10,7 +10,15 @@ from fastapi.responses import StreamingResponse
 
 from config import ANALYZE_PROMPT, LLAMA_MODEL, LLAMA_URL
 from models import User
-from schemas import ImageScanResponse, ScanItemOut
+from schemas import (
+    ImageScanResponse,
+    LegacyIngredientAnalysisRequest,
+    LegacyIngredientAnalysisResponse,
+    LegacyRecipeGenerationRequest,
+    LegacyRecipeOut,
+    LegacyRecipeResponse,
+    ScanItemOut,
+)
 from security import get_current_user
 
 router = APIRouter(prefix="/ai", tags=["ai"])
@@ -43,6 +51,27 @@ _EXPIRY_HINTS_DAYS = {
     "rice": 180,
     "pasta": 180,
 }
+
+_LEGACY_INGREDIENT_HINTS = [
+    "tomato",
+    "onion",
+    "garlic",
+    "carrot",
+    "potato",
+    "milk",
+    "egg",
+    "cheese",
+    "rice",
+    "pasta",
+]
+
+
+def _legacy_ingredients_from_base64(image_base64: str) -> list[str]:
+    digest = json.dumps({"b64": image_base64[:200]}).encode("utf-8", errors="ignore")
+    token = sum(digest) % 256
+    count = 3 + (token % 4)
+    start = (token // 3) % len(_LEGACY_INGREDIENT_HINTS)
+    return [_LEGACY_INGREDIENT_HINTS[(start + i) % len(_LEGACY_INGREDIENT_HINTS)] for i in range(count)]
 
 
 def _extract_json_text(raw: str) -> str:
@@ -243,3 +272,31 @@ async def scan_image(file: UploadFile = File(...), _: User = Depends(get_current
                 "raw_model_response": r.text,
             },
         ) from e
+
+
+@router.post("/analyze-base64", response_model=LegacyIngredientAnalysisResponse)
+def analyze_base64(payload: LegacyIngredientAnalysisRequest):
+    ingredients = _legacy_ingredients_from_base64(payload.imageBase64)
+    return LegacyIngredientAnalysisResponse(ingredients=ingredients)
+
+
+@router.post("/recipes-legacy", response_model=LegacyRecipeResponse)
+def legacy_recipes(payload: LegacyRecipeGenerationRequest):
+    ingredients = [i.strip().lower() for i in payload.ingredients if i.strip()]
+    if not ingredients:
+        ingredients = ["tomato", "onion", "garlic"]
+    top = ", ".join(ingredients[:3])
+    return LegacyRecipeResponse(
+        recipes=[
+            LegacyRecipeOut(
+                id=f"legacy-{abs(hash(top)) % 1_000_000}",
+                title=f"Pantry Meal: {top}",
+                instructions=[
+                    "Prep and wash all ingredients.",
+                    "Cook the aromatics first, then add remaining ingredients.",
+                    "Season to taste and serve warm.",
+                ],
+                imageUrl=None,
+            )
+        ]
+    )

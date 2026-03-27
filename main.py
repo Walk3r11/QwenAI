@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from sqlalchemy import text
 
 from auth_routes import router as auth_router
+from ai_routes import router as ai_router
 from config import DATABASE_URL, ENABLE_AI, JWT_SECRET
 from db import Base, SessionLocal, engine
 import models
@@ -19,10 +20,7 @@ app.include_router(groups_router)
 app.include_router(pantry_router)
 app.include_router(recipes_router)
 app.include_router(share_router)
-if ENABLE_AI:
-    from ai_routes import router as ai_router
-
-    app.include_router(ai_router)
+app.include_router(ai_router)
 
 
 @app.on_event("startup")
