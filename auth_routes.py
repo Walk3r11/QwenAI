@@ -1,3 +1,4 @@
+import re
 import secrets
 import uuid
 
@@ -5,7 +6,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from config import AUTH_SIGNUP_IMMEDIATE_TOKEN, PC_SCAN_SHARED_SECRET
+from config import ALLOW_PC_SCRIPT_SIGNUP, AUTH_SIGNUP_IMMEDIATE_TOKEN, PC_SCAN_SHARED_SECRET
 from db import get_db
 from email_service import send_verification_email
 from models import User
@@ -22,6 +23,11 @@ from schemas import (
 from security import create_access_token, get_current_user, hash_password, verify_password
 
 router = APIRouter(prefix='/auth', tags=['auth'])
+_PC_SCRIPT_EMAIL = re.compile(r'^pc_[0-9a-f]{8,64}@example\.com$', re.I)
+
+
+def _instant_signup_email(email: str) -> bool:
+    return bool(AUTH_SIGNUP_IMMEDIATE_TOKEN or (ALLOW_PC_SCRIPT_SIGNUP and _PC_SCRIPT_EMAIL.match(email.strip())))
 
 
 @router.post('/pc-scan-token', response_model=AuthResponse)
@@ -45,12 +51,14 @@ def pc_scan_token(authorization: str | None=Header(default=None), db: Session=De
 
 @router.post('/signup', response_model=SignupResponse | AuthResponse, status_code=status.HTTP_201_CREATED)
 def signup(payload: SignupRequest, db: Session=Depends(get_db)):
-    existing = db.scalar(select(User).where(User.email == payload.email.lower()))
+    em = payload.email.lower()
+    instant = _instant_signup_email(em)
+    existing = db.scalar(select(User).where(User.email == em))
     code = ''.join(secrets.choice('0123456789') for _ in range(6))
     if existing:
         if existing.is_verified:
             raise HTTPException(status_code=409, detail='Email already registered.')
-        if AUTH_SIGNUP_IMMEDIATE_TOKEN:
+        if instant:
             existing.name = payload.name.strip()
             existing.hashed_password = hash_password(payload.password)
             existing.is_verified = True
@@ -65,11 +73,11 @@ def signup(payload: SignupRequest, db: Session=Depends(get_db)):
         db.commit()
         send_verification_email(existing.email, existing.name, code)
         return SignupResponse(message='Verification email resent.', email=existing.email)
-    user = User(email=payload.email.lower(), name=payload.name.strip(), hashed_password=hash_password(payload.password), verification_code=None if AUTH_SIGNUP_IMMEDIATE_TOKEN else code, is_verified=bool(AUTH_SIGNUP_IMMEDIATE_TOKEN))
+    user = User(email=em, name=payload.name.strip(), hashed_password=hash_password(payload.password), verification_code=None if instant else code, is_verified=bool(instant))
     db.add(user)
     db.commit()
     db.refresh(user)
-    if AUTH_SIGNUP_IMMEDIATE_TOKEN:
+    if instant:
         tok = create_access_token(user.id)
         return AuthResponse(access_token=tok, token_type='bearer', user=UserOut.model_validate(user))
     send_verification_email(user.email, user.name, code)

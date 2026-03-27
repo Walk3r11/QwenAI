@@ -11,6 +11,7 @@ ENABLE_AI = os.getenv('ENABLE_AI', 'false').strip().lower() in {'1', 'true', 'ye
 QWENAI_TESTING = os.getenv('QWENAI_TESTING', '').strip().lower() in {'1', 'true', 'yes', 'on'}
 AUTH_SIGNUP_IMMEDIATE_TOKEN = QWENAI_TESTING
 PC_SCAN_SHARED_SECRET = os.getenv('PC_SCAN_SHARED_SECRET', '').strip()
+ALLOW_PC_SCRIPT_SIGNUP = os.getenv('ALLOW_PC_SCRIPT_SIGNUP', 'false').strip().lower() in {'1', 'true', 'yes', 'on'}
 LLAMA_URL = os.getenv('LLAMA_URL', 'http://127.0.0.1:8081/v1/chat/completions')
 LLAMA_MODEL = os.getenv('LLAMA_MODEL', 'qwen2.5-vl')
 _read_raw = os.getenv('LLAMA_HTTP_READ_TIMEOUT', '86400').strip().lower()

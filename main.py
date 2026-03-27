@@ -2,7 +2,7 @@ import os
 from fastapi import FastAPI
 from sqlalchemy import text
 from auth_routes import router as auth_router
-from config import DATABASE_URL, ENABLE_AI, FRESHNESS_DEFAULT, FRESHNESS_MAX, FRESHNESS_MIN, JWT_SECRET, MODEL_DIR
+from config import ALLOW_PC_SCRIPT_SIGNUP, DATABASE_URL, ENABLE_AI, FRESHNESS_DEFAULT, FRESHNESS_MAX, FRESHNESS_MIN, JWT_SECRET, MODEL_DIR
 from db import Base, SessionLocal, engine
 from groq_client import groq_configured
 import models
@@ -135,7 +135,7 @@ def health():
         db_ok = False
     model_present = os.path.exists(f'{MODEL_DIR}/qwen.gguf')
     mmproj_present = os.path.exists(f'{MODEL_DIR}/mmproj.gguf')
-    return {'ok': True, 'db_connected': db_ok, 'using_neon': 'neon.tech' in DATABASE_URL, 'jwt_configured': bool(JWT_SECRET), 'ai_enabled': ENABLE_AI, 'model_file_present': model_present if ENABLE_AI else None, 'mmproj_file_present': mmproj_present if ENABLE_AI else None, 'groq_configured': groq_configured(), 'freshness_min': FRESHNESS_MIN, 'freshness_max': FRESHNESS_MAX, 'freshness_default': FRESHNESS_DEFAULT}
+    return {'ok': True, 'db_connected': db_ok, 'using_neon': 'neon.tech' in DATABASE_URL, 'jwt_configured': bool(JWT_SECRET), 'ai_enabled': ENABLE_AI, 'model_file_present': model_present if ENABLE_AI else None, 'mmproj_file_present': mmproj_present if ENABLE_AI else None, 'groq_configured': groq_configured(), 'freshness_min': FRESHNESS_MIN, 'freshness_max': FRESHNESS_MAX, 'freshness_default': FRESHNESS_DEFAULT, 'allow_pc_script_signup': ALLOW_PC_SCRIPT_SIGNUP}
 if __name__ == '__main__':
     import uvicorn
     uvicorn.run('main:app', host='0.0.0.0', port=int(os.getenv('PORT', '8000')))

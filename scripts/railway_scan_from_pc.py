@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import secrets
 import sys
+import uuid
 from pathlib import Path
 
 import requests
@@ -56,7 +58,7 @@ def mime_for(p: Path) -> str:
     return 'application/octet-stream'
 
 
-def ping_health(base: str) -> None:
+def ping_health(base: str) -> dict:
     url = f'{base}/health'
     t = _health_timeout()
     print(f'GET {url} (connect≤{t[0]:.0f}s read≤{t[1]:.0f}s)…', file=sys.stderr)
@@ -76,10 +78,11 @@ def ping_health(base: str) -> None:
         print(f'Health HTTP {r.status_code}: {r.text[:500]}', file=sys.stderr)
         sys.exit(1)
     data = r.json()
-    print(f'  ok: db_connected={data.get("db_connected")} ai_enabled={data.get("ai_enabled")}', file=sys.stderr)
+    print(f'  ok: db_connected={data.get("db_connected")} ai_enabled={data.get("ai_enabled")} allow_pc_script_signup={data.get("allow_pc_script_signup")}', file=sys.stderr)
+    return data
 
 
-def get_token(base: str, email: str | None, password: str | None) -> str:
+def get_token(base: str, email: str | None, password: str | None, health: dict) -> str:
     raw = os.environ.get('RAILWAY_BEARER_TOKEN', '').strip()
     if raw:
         print('Using RAILWAY_BEARER_TOKEN (no login request).', file=sys.stderr)
@@ -102,38 +105,61 @@ def get_token(base: str, email: str | None, password: str | None) -> str:
         print(f'pc-scan-token {pr.status_code}: {pr.text[:400]}', file=sys.stderr)
         sys.exit(1)
 
-    if not (email and password):
+    if email and password:
+        print(f'POST {base}/auth/login (connect≤{t[0]:.0f}s read≤{t[1]:.0f}s)…', file=sys.stderr)
+        try:
+            r = requests.post(
+                f'{base}/auth/login',
+                json={'email': email.strip().lower(), 'password': password},
+                timeout=t,
+            )
+        except requests.exceptions.ConnectTimeout as e:
+            print(f'Login connect timeout: {e}', file=sys.stderr)
+            sys.exit(1)
+        except requests.exceptions.ReadTimeout as e:
+            print(
+                f'Login read timeout after {t[1]:.0f}s — the server did connect; DB or app is slow (cold start).\n'
+                'Raise RAILWAY_AUTH_READ_TIMEOUT (e.g. 300) or hit /health in a browser once to wake the service.',
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if r.status_code != 200:
+            print(f'Login failed {r.status_code}: {r.text[:400]}', file=sys.stderr)
+            if r.status_code == 401:
+                print('Use your real registered email and password for this deployment (not example placeholders).', file=sys.stderr)
+            if r.status_code == 403 and 'verified' in (r.text or '').lower():
+                print('Complete email verification for this account, then retry.', file=sys.stderr)
+            sys.exit(1)
+        return r.json()['access_token']
+
+    if not health.get('allow_pc_script_signup'):
         print(
-            'Set RAILWAY_PC_SCAN_SECRET in .env (same value as PC_SCAN_SHARED_SECRET on Railway), or RAILWAY_EMAIL+PASSWORD / --email+--password, or RAILWAY_BEARER_TOKEN.',
+            'Set ALLOW_PC_SCRIPT_SIGNUP=true on Railway (Variables) and redeploy so /auth/signup accepts pc_<hex>@example.com with a JWT, '
+            'or set RAILWAY_PC_SCAN_SECRET / RAILWAY_EMAIL+PASSWORD / RAILWAY_BEARER_TOKEN.',
             file=sys.stderr,
         )
         sys.exit(1)
 
-    print(f'POST {base}/auth/login (connect≤{t[0]:.0f}s read≤{t[1]:.0f}s)…', file=sys.stderr)
-    try:
-        r = requests.post(
-            f'{base}/auth/login',
-            json={'email': email.strip().lower(), 'password': password},
-            timeout=t,
-        )
-    except requests.exceptions.ConnectTimeout as e:
-        print(f'Login connect timeout: {e}', file=sys.stderr)
-        sys.exit(1)
-    except requests.exceptions.ReadTimeout as e:
-        print(
-            f'Login read timeout after {t[1]:.0f}s — the server did connect; DB or app is slow (cold start).\n'
-            'Raise RAILWAY_AUTH_READ_TIMEOUT (e.g. 300) or hit /health in a browser once to wake the service.',
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    if r.status_code != 200:
-        print(f'Login failed {r.status_code}: {r.text[:400]}', file=sys.stderr)
-        if r.status_code == 401:
-            print('Use your real registered email and password for this deployment (not example placeholders).', file=sys.stderr)
-        if r.status_code == 403 and 'verified' in (r.text or '').lower():
-            print('Complete email verification for this account, then retry.', file=sys.stderr)
-        sys.exit(1)
-    return r.json()['access_token']
+    for _ in range(8):
+        em = f'pc_{uuid.uuid4().hex}@example.com'
+        pw = f'Pc_{secrets.token_urlsafe(24)}1aA'
+        print(f'POST {base}/auth/signup ({em})…', file=sys.stderr)
+        try:
+            sr = requests.post(f'{base}/auth/signup', json={'email': em, 'name': 'PC scan', 'password': pw}, timeout=t)
+        except (requests.exceptions.ConnectTimeout, requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as e:
+            print(f'{e}', file=sys.stderr)
+            sys.exit(1)
+        if sr.status_code == 201:
+            data = sr.json()
+            if data.get('access_token'):
+                return data['access_token']
+            print('Signup returned no JWT. Set ALLOW_PC_SCRIPT_SIGNUP=true on the API and redeploy.', file=sys.stderr)
+            sys.exit(1)
+        if sr.status_code != 409:
+            print(f'Signup failed {sr.status_code}: {sr.text[:400]}', file=sys.stderr)
+            sys.exit(1)
+    print('Signup kept returning 409.', file=sys.stderr)
+    sys.exit(1)
 
 
 SCAN_TIMEOUT = (60, int(os.environ.get('RAILWAY_SCAN_READ_TIMEOUT', '86400')))
@@ -231,11 +257,11 @@ def main() -> None:
     paths = collect_images(args.max)
     print(f'Base: {base}\nImages ({len(paths)}): ' + ', '.join(p.name for p in paths), file=sys.stderr)
 
-    ping_health(base)
+    health = ping_health(base)
 
     email = args.email if args.email is not None else os.environ.get('RAILWAY_EMAIL')
     password = args.password if args.password is not None else os.environ.get('RAILWAY_PASSWORD')
-    token = get_token(base, email, password)
+    token = get_token(base, email, password, health)
 
     data = stream_scan(base, token, paths)
     sid = data.get('id')
