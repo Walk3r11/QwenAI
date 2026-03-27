@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from config import ALLOW_PC_SCRIPT_SIGNUP, AUTH_SIGNUP_IMMEDIATE_TOKEN, PC_SCAN_SHARED_SECRET
+from config import ALLOW_PC_SCRIPT_SIGNUP, AUTH_SIGNUP_IMMEDIATE_TOKEN, GOOGLE_WEB_CLIENT_ID, PC_SCAN_SHARED_SECRET
 from db import get_db
 from email_service import send_verification_email
 from models import User
@@ -118,12 +118,13 @@ def google_auth(payload: GoogleAuthRequest, db: Session = Depends(get_db)):
     from google.auth.transport import requests
     import os
 
-    WEB_CLIENT_ID = os.environ.get("GOOGLE_WEB_CLIENT_ID", "")
+    print(f"[DEBUG] Verification attempt with WEB_CLIENT_ID: {GOOGLE_WEB_CLIENT_ID}")
     
     try:
-        idinfo = id_token.verify_oauth2_token(payload.id_token, requests.Request(), WEB_CLIENT_ID)
-    except ValueError:
-        raise HTTPException(status_code=401, detail="Invalid Google token.")
+        idinfo = id_token.verify_oauth2_token(payload.id_token, requests.Request(), GOOGLE_WEB_CLIENT_ID)
+    except ValueError as e:
+        print(f"[DEBUG] Google token verification failed: {str(e)}")
+        raise HTTPException(status_code=401, detail=f"Invalid Google token: {str(e)}")
 
     email = idinfo.get("email")
     if not email:

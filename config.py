@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from identification_data import ALLOWED_GROUP_CODES_PROMPT
 load_dotenv(Path(__file__).resolve().parent / '.env')
 DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///./app.db')
+GOOGLE_WEB_CLIENT_ID = os.getenv('GOOGLE_WEB_CLIENT_ID', '')
 JWT_SECRET = os.getenv('JWT_SECRET', '')
 JWT_ALGORITHM = 'HS256'
 JWT_EXPIRE_MINUTES = int(os.getenv('JWT_EXPIRE_MINUTES', '10080'))
