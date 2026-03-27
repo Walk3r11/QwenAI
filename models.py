@@ -2,6 +2,7 @@ from __future__ import annotations
 from datetime import datetime
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from config import FRESHNESS_DEFAULT
 from db import Base
 
 class User(Base):
@@ -44,7 +45,7 @@ class ScanItem(Base):
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     session_id: Mapped[int] = mapped_column(ForeignKey('scan_sessions.id', ondelete='CASCADE'), index=True, nullable=False)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
-    freshness: Mapped[int] = mapped_column(Integer, default=8, nullable=False)
+    freshness: Mapped[int] = mapped_column(Integer, default=FRESHNESS_DEFAULT, nullable=False)
     qty: Mapped[str] = mapped_column(String(50), default='', nullable=False)
     unit: Mapped[str | None] = mapped_column(String(32), nullable=True)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -89,9 +90,9 @@ class FreshnessRef(Base):
     __table_args__ = (UniqueConstraint('product_name', name='uq_freshness_product'),)
     id: Mapped[int] = mapped_column(primary_key=True)
     product_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
-    avg_freshness: Mapped[float] = mapped_column(Float, default=8.0, nullable=False)
+    avg_freshness: Mapped[float] = mapped_column(Float, default=float(FRESHNESS_DEFAULT), nullable=False)
     observations: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    last_freshness: Mapped[int] = mapped_column(Integer, default=8, nullable=False)
+    last_freshness: Mapped[int] = mapped_column(Integer, default=FRESHNESS_DEFAULT, nullable=False)
     updated_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 class TrainingImage(Base):
@@ -147,7 +148,7 @@ class PantryItem(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey('users.id', ondelete='CASCADE'), index=True, nullable=False)
     session_id: Mapped[int | None] = mapped_column(ForeignKey('scan_sessions.id', ondelete='SET NULL'), index=True, nullable=True)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
-    freshness: Mapped[int] = mapped_column(Integer, default=8, nullable=False)
+    freshness: Mapped[int] = mapped_column(Integer, default=FRESHNESS_DEFAULT, nullable=False)
     quantity: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     unit: Mapped[str | None] = mapped_column(String(32), nullable=True)
     source: Mapped[str] = mapped_column(String(32), default='manual', nullable=False)

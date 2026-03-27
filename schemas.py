@@ -2,6 +2,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel, EmailStr, Field
+from config import FRESHNESS_DEFAULT, FRESHNESS_MAX, FRESHNESS_MIN
 
 class SignupRequest(BaseModel):
     email: EmailStr
@@ -36,7 +37,7 @@ class IdentificationGroupOut(BaseModel):
 class ScanItemOut(BaseModel):
     id: int
     name: str
-    freshness: int = 8
+    freshness: int = FRESHNESS_DEFAULT
     qty: str = ''
     unit: str | None = None
     confidence: float | None = None
@@ -87,14 +88,14 @@ class ScanSessionOut(BaseModel):
 
 class AddItemRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
-    freshness: int = Field(default=8, ge=1, le=10)
+    freshness: int = Field(default=FRESHNESS_DEFAULT, ge=FRESHNESS_MIN, le=FRESHNESS_MAX)
     qty: str = Field(default='1', max_length=50)
     unit: str | None = Field(default=None, max_length=32)
     identification_group_codes: list[str] = Field(default_factory=list, max_length=24)
 
 class EditItemRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
-    freshness: int | None = Field(default=None, ge=1, le=10)
+    freshness: int | None = Field(default=None, ge=FRESHNESS_MIN, le=FRESHNESS_MAX)
     qty: str | None = Field(default=None, max_length=50)
     unit: str | None = None
     identification_group_codes: list[str] | None = None
@@ -163,7 +164,7 @@ class PantryItemCreateRequest(BaseModel):
 class PantryItemOut(BaseModel):
     id: int
     name: str
-    freshness: int = 8
+    freshness: int = FRESHNESS_DEFAULT
     quantity: int
     unit: str | None
     source: str

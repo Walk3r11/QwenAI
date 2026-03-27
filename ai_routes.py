@@ -14,7 +14,7 @@ from fastapi.responses import StreamingResponse
 from PIL import Image
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, selectinload
-from config import GROQ_RECIPE_USER_PROMPT, GROQ_SYSTEM_PROMPT, LLAMA_HTTP_TIMEOUT, LLAMA_MODEL, LLAMA_URL, MODEL_DIR, RECIPE_PROMPT, SCAN_PROMPT, SCAN_STREAM_HEARTBEAT_SEC, VISION_MAX_TOKENS
+from config import FRESHNESS_DEFAULT, FRESHNESS_MAX, FRESHNESS_MIN, GROQ_RECIPE_USER_PROMPT, GROQ_SYSTEM_PROMPT, LLAMA_HTTP_TIMEOUT, LLAMA_MODEL, LLAMA_URL, MODEL_DIR, RECIPE_PROMPT, SCAN_PROMPT, SCAN_STREAM_HEARTBEAT_SEC, VISION_MAX_TOKENS
 from identification_data import KNOWN_IDENTIFICATION_CODES
 from db import SessionLocal, get_db
 from groq_client import groq_chat_json, groq_configured
@@ -303,23 +303,32 @@ def _estimate_expires(name: str) -> datetime | None:
             return datetime.now(timezone.utc) + timedelta(days=days)
     return None
 
+def _freshness_norm(score: float) -> float:
+    span = FRESHNESS_MAX - FRESHNESS_MIN
+    if span <= 0:
+        return 1.0
+    return (score - FRESHNESS_MIN) / span
+
 def _freshness_alert(score: int) -> str | None:
-    if score <= 1:
+    if score <= FRESHNESS_MIN:
         return 'SPOILED — do NOT consume, discard immediately'
-    if score <= 3:
+    n = _freshness_norm(score)
+    if n <= 0.25:
         return 'WARNING — about to expire, use today or discard'
-    if score <= 5:
+    if n < 1.0:
         return 'Use soon — quality is declining'
     return None
 
 def _freshness_label(score: float) -> str:
-    if score >= 8:
+    score = max(float(FRESHNESS_MIN), min(float(FRESHNESS_MAX), float(score)))
+    n = _freshness_norm(score)
+    if n >= 0.8:
         return 'fresh'
-    if score >= 6:
+    if n >= 0.55:
         return 'good'
-    if score >= 4:
+    if n >= 0.35:
         return 'use-soon'
-    if score >= 2:
+    if n >= 0.15:
         return 'expiring'
     return 'spoiled'
 
@@ -335,20 +344,20 @@ def _build_freshness_context(db: Session, user_id: int) -> str:
     for r in refs:
         label = _freshness_label(r.avg_freshness)
         imgs = training_counts.get(r.product_name, 0)
-        lines.append(f'  {r.product_name}: avg {r.avg_freshness:.1f}/10 ({label}), seen {r.observations}x, last scored {r.last_freshness}/10, {imgs} training images saved')
+        lines.append(f'  {r.product_name}: avg {r.avg_freshness:.1f}/{FRESHNESS_MAX} ({label}), seen {r.observations}x, last scored {r.last_freshness}/{FRESHNESS_MAX}, {imgs} training images saved')
     return '\n\nYou have learned from previous scans. Use this data to improve accuracy:\n' + '\n'.join(lines) + "\nBe more precise for products you've seen many times.\n"
 
 def _clamp_freshness(val) -> int:
     try:
         v = int(val)
     except (TypeError, ValueError):
-        return 8
-    return max(1, min(10, v))
+        return FRESHNESS_DEFAULT
+    return max(FRESHNESS_MIN, min(FRESHNESS_MAX, v))
 
 def _update_freshness_refs(db: Session, items: list[dict]):
     for item in items:
         name = item.get('name', '').strip().lower()
-        freshness = _clamp_freshness(item.get('freshness', 8))
+        freshness = _clamp_freshness(item.get('freshness', FRESHNESS_DEFAULT))
         if not name:
             continue
         ref = db.scalar(select(FreshnessRef).where(FreshnessRef.product_name == name))
@@ -489,7 +498,7 @@ async def create_session(files: List[UploadFile]=File(...), user_id: int=Depends
                 name = str(item_data.get('name', '')).strip()
                 if not name:
                     continue
-                item = ScanItem(session_id=session.id, name=name, freshness=_clamp_freshness(item_data.get('freshness', 8)), qty=str(item_data.get('qty', '')), unit=item_data.get('unit'), confidence=item_data.get('confidence'), source='ai')
+                item = ScanItem(session_id=session.id, name=name, freshness=_clamp_freshness(item_data.get('freshness', FRESHNESS_DEFAULT)), qty=str(item_data.get('qty', '')), unit=item_data.get('unit'), confidence=item_data.get('confidence'), source='ai')
                 db.add(item)
                 db.flush()
                 codes = _normalize_identification_codes(item_data.get('groups'))
@@ -693,7 +702,7 @@ def generate_groq_recipes(session_id: int, user: User=Depends(get_current_user),
         raise HTTPException(status_code=409, detail='Confirm the session first.')
     if not session.items:
         raise HTTPException(status_code=400, detail='No items in session.')
-    items_text = ', '.join((f'{i.name} (freshness {i.freshness}/10, qty: {i.qty})' for i in session.items))
+    items_text = ', '.join((f'{i.name} (freshness {i.freshness}/{FRESHNESS_MAX}, qty: {i.qty})' for i in session.items))
     user_msg = GROQ_RECIPE_USER_PROMPT.replace('{items}', items_text)
     try:
         raw_text = groq_chat_json(GROQ_SYSTEM_PROMPT, user_msg)

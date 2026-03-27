@@ -38,20 +38,20 @@ def test_recipe_entries_alternate_keys():
     assert _recipe_entries_from_parsed({'data': {'recipes': [{'name': 'C'}]}})[0]['name'] == 'C'
 
 def test_clamp_freshness():
-    assert _clamp_freshness(5) == 5
+    assert _clamp_freshness(3) == 3
     assert _clamp_freshness(0) == 1
-    assert _clamp_freshness(15) == 10
-    assert _clamp_freshness('8') == 8
-    assert _clamp_freshness(None) == 8
+    assert _clamp_freshness(15) == 5
+    assert _clamp_freshness('4') == 4
+    assert _clamp_freshness(None) == 3
 
 def test_freshness_alert():
-    assert _freshness_alert(10) is None
-    assert _freshness_alert(7) is None
-    assert 'soon' in (_freshness_alert(5) or '').lower()
+    assert _freshness_alert(5) is None
+    assert 'soon' in (_freshness_alert(4) or '').lower()
+    assert 'soon' in (_freshness_alert(3) or '').lower()
     assert 'WARNING' in (_freshness_alert(2) or '')
     assert 'SPOILED' in (_freshness_alert(1) or '')
 
 def test_freshness_label():
-    assert _freshness_label(9.0) == 'fresh'
-    assert _freshness_label(6.5) == 'good'
-    assert _freshness_label(4.0) == 'use-soon'
+    assert _freshness_label(5.0) == 'fresh'
+    assert _freshness_label(4.0) == 'good'
+    assert _freshness_label(3.0) == 'use-soon'

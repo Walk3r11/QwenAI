@@ -12,15 +12,13 @@ from pathlib import Path
 import requests
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+from config import FRESHNESS_MAX
+
 TEST_IMAGES = REPO_ROOT / 'test_images'
 DEFAULT_BASE = 'https://qwenai-production.up.railway.app'
 EXTS = {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.JPG', '.JPEG', '.PNG'}
-
-FALLBACK_ITEMS = [
-    {'name': 'Cherry tomatoes', 'freshness': 7, 'qty': '200', 'unit': 'g', 'identification_group_codes': ['produce']},
-    {'name': 'Chicken thighs', 'freshness': 6, 'qty': '4', 'unit': None, 'identification_group_codes': ['protein']},
-    {'name': 'Greek yogurt', 'freshness': 8, 'qty': '500', 'unit': 'g', 'identification_group_codes': ['dairy', 'protein']},
-]
 
 
 def collect_images(max_n: int) -> list[Path]:
@@ -83,7 +81,6 @@ SCAN_TIMEOUT = (60, int(os.environ.get('RAILWAY_SCAN_READ_TIMEOUT', '86400')))
 
 
 def stream_scan(base: str, token: str, paths: list[Path]) -> dict:
-    """POST /ai/sessions returns NDJSON; first line arrives immediately (avoids Railway first-byte timeout)."""
     headers = {'Authorization': f'Bearer {token}'}
     files = []
     for p in paths:
@@ -158,25 +155,14 @@ def print_food_and_categories(label: str, session: dict) -> None:
         unit = it.get('unit')
         groups = it.get('identification_groups') or []
         cats = ', '.join((f"{g.get('code')} ({g.get('label', '')})" for g in groups)) or '(no categories)'
-        print(f'  • Food: {name!r} | freshness {fr}/10 | qty {qty} {unit or ""}'.strip(), file=sys.stderr)
+        print(f'  • Food: {name!r} | freshness {fr}/{FRESHNESS_MAX} | qty {qty} {unit or ""}'.strip(), file=sys.stderr)
         print(f'    Categories: {cats}', file=sys.stderr)
-
-
-def add_fallback_items(base: str, token: str, sid: int) -> None:
-    h = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
-    print('\nVision returned no items — adding manual items to test categories + recipes…', file=sys.stderr)
-    for row in FALLBACK_ITEMS:
-        r = requests.post(f'{base}/ai/sessions/{sid}/items', headers=h, json=row, timeout=60)
-        if r.status_code != 201:
-            print(f'POST item failed {r.status_code}: {r.text[:400]}', file=sys.stderr)
-            sys.exit(1)
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description='Full Railway test: scan → food + categories → confirm → Groq recipes')
     ap.add_argument('--max', type=int, default=10, help='max images (default 10)')
     ap.add_argument('--no-full', action='store_true', help='only run vision scan JSON to stdout')
-    ap.add_argument('--strict-vision', action='store_true', help='do not add manual items if vision is empty')
     args = ap.parse_args()
     full = not args.no_full
 
@@ -204,13 +190,9 @@ def main() -> None:
     print_food_and_categories('After vision scan', session)
 
     if not session.get('items'):
-        if args.strict_vision:
-            print('\nStrict mode: no items from vision — skipping confirm / Groq.', file=sys.stderr)
-            print(json.dumps(session, indent=2))
-            sys.exit(2)
-        add_fallback_items(base, token, sid)
-        session = fetch_session(base, token, sid)
-        print_food_and_categories('After manual fallback items', session)
+        print('\nERROR: Vision returned zero items — scan pipeline is not OK; refusing to confirm or call Groq.', file=sys.stderr)
+        print(json.dumps(session, indent=2))
+        sys.exit(2)
 
     h = {'Authorization': f'Bearer {token}'}
     cr = requests.post(f'{base}/ai/sessions/{sid}/confirm', headers=h, timeout=(60, 300))

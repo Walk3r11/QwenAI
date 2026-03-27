@@ -1,5 +1,6 @@
 import json
 from unittest.mock import patch
+from config import FRESHNESS_MAX
 from scan_upload_helpers import multipart_image_files
 from test_ai_api import FakeStreamResponse, _read_ndjson_last, _sse_stream_for_json
 
@@ -7,7 +8,7 @@ from test_ai_api import FakeStreamResponse, _read_ndjson_last, _sse_stream_for_j
 @patch('ai_routes.groq_configured', return_value=True)
 @patch('ai_routes.requests.post')
 def test_ten_images_full_stack_mocked(mock_llama_post, _mock_groq_cfg, mock_groq_chat, client, auth_headers):
-    scan_payload = {'items': [{'name': 'salmon', 'freshness': 5, 'qty': '2', 'unit': 'fillets', 'confidence': 0.91, 'groups': ['protein']}, {'name': 'asparagus', 'freshness': 6, 'qty': '1', 'unit': 'bunch', 'confidence': 0.88, 'groups': ['produce']}, {'name': 'lemon', 'freshness': 8, 'qty': '2', 'unit': None, 'confidence': 0.85, 'groups': ['produce']}], 'tip': 'Use salmon within 48h.'}
+    scan_payload = {'items': [{'name': 'salmon', 'freshness': 5, 'qty': '2', 'unit': 'fillets', 'confidence': 0.91, 'groups': ['protein']}, {'name': 'asparagus', 'freshness': 4, 'qty': '1', 'unit': 'bunch', 'confidence': 0.88, 'groups': ['produce']}, {'name': 'lemon', 'freshness': 5, 'qty': '2', 'unit': None, 'confidence': 0.85, 'groups': ['produce']}], 'tip': 'Use salmon within 48h.'}
     mock_llama_post.return_value = FakeStreamResponse(_sse_stream_for_json(scan_payload))
     mock_groq_chat.return_value = json.dumps({'recipes': [{'name': 'Salmon with asparagus', 'uses': ['salmon', 'asparagus', 'lemon'], 'extra': ['olive oil', 'salt'], 'steps': ['Roast asparagus', 'Pan-sear salmon', 'Finish with lemon'], 'minutes': 35}]})
     files = multipart_image_files(10)
@@ -40,3 +41,4 @@ def test_ten_images_full_stack_mocked(mock_llama_post, _mock_groq_cfg, mock_groq
     health = client.get('/health').json()
     assert health.get('ok') is True
     assert 'groq_configured' in health
+    assert health.get('freshness_max') == FRESHNESS_MAX

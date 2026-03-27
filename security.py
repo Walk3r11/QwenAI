@@ -45,7 +45,6 @@ def get_current_user(token: str=Depends(oauth2_scheme), db: Session=Depends(get_
     return user
 
 def get_current_user_id_for_stream(token: str=Depends(oauth2_scheme)) -> int:
-    """For StreamingResponse routes: DB session is opened and closed before the stream runs (avoids idle SSL drops on Neon)."""
     user_id = decode_access_token_user_id(token)
     db = SessionLocal()
     try:

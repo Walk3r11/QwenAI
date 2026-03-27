@@ -54,7 +54,7 @@ def test_identification_groups_catalog(client, auth_headers):
 
 @patch('ai_routes.requests.post')
 def test_create_session_ndjson_done(mock_post, client, auth_headers):
-    payload = {'items': [{'name': 'tomato', 'freshness': 7, 'qty': '3', 'unit': None, 'confidence': 0.88, 'groups': ['produce']}], 'tip': 'use soon'}
+    payload = {'items': [{'name': 'tomato', 'freshness': 5, 'qty': '3', 'unit': None, 'confidence': 0.88, 'groups': ['produce']}], 'tip': 'use soon'}
     mock_post.return_value = FakeStreamResponse(_sse_stream_for_json(payload))
     files = [('files', ('shot.png', _tiny_png(), 'image/png'))]
     with client.stream('POST', '/ai/sessions', files=files, headers=auth_headers) as resp:
@@ -64,7 +64,7 @@ def test_create_session_ndjson_done(mock_post, client, auth_headers):
     assert data['id'] >= 1
     assert len(data['items']) == 1
     assert data['items'][0]['name'] == 'tomato'
-    assert data['items'][0]['freshness'] == 7
+    assert data['items'][0]['freshness'] == 5
     assert data['items'][0]['alert'] is None
     codes = {g['code'] for g in data['items'][0].get('identification_groups', [])}
     assert 'produce' in codes
@@ -100,7 +100,7 @@ def test_manual_item_patch_delete(mock_post, client, auth_headers):
     with client.stream('POST', '/ai/sessions', files=files, headers=auth_headers) as resp:
         session = _read_ndjson_last(resp)
     sid = session['id']
-    r = client.post(f'/ai/sessions/{sid}/items', headers=auth_headers, json={'name': 'rice', 'freshness': 9, 'qty': '500', 'unit': 'g', 'identification_group_codes': ['pantry']})
+    r = client.post(f'/ai/sessions/{sid}/items', headers=auth_headers, json={'name': 'rice', 'freshness': 5, 'qty': '500', 'unit': 'g', 'identification_group_codes': ['pantry']})
     assert r.status_code == 201
     body = r.json()
     item_id = body['id']
@@ -154,7 +154,7 @@ def test_groq_recipes_saves_recipes(mock_llama_post, _mock_groq_cfg, mock_groq_c
 @patch('ai_routes.groq_configured', return_value=True)
 @patch('ai_routes.requests.post')
 def test_full_pipeline_mock_vision_then_groq_recipes(mock_llama_post, _mock_groq_cfg, mock_groq_chat, client, auth_headers):
-    scan_payload = {'items': [{'name': 'eggs', 'freshness': 8, 'qty': '6', 'unit': None, 'confidence': 0.92, 'groups': ['protein']}, {'name': 'spinach', 'freshness': 5, 'qty': '200', 'unit': 'g', 'confidence': 0.85, 'groups': ['produce']}], 'tip': 'Use spinach soon'}
+    scan_payload = {'items': [{'name': 'eggs', 'freshness': 4, 'qty': '6', 'unit': None, 'confidence': 0.92, 'groups': ['protein']}, {'name': 'spinach', 'freshness': 3, 'qty': '200', 'unit': 'g', 'confidence': 0.85, 'groups': ['produce']}], 'tip': 'Use spinach soon'}
     mock_llama_post.return_value = FakeStreamResponse(_sse_stream_for_json(scan_payload))
     mock_groq_chat.return_value = json.dumps({'recipes': [{'name': 'Spinach omelette', 'uses': ['eggs', 'spinach'], 'extra': ['butter', 'salt'], 'steps': ['Whisk eggs', 'Wilt spinach', 'Fold and cook'], 'minutes': 15}, {'name': 'Green scramble', 'uses': ['eggs', 'spinach'], 'extra': [], 'steps': ['Scramble with spinach'], 'minutes': 10}]})
     files = multipart_image_files(10)

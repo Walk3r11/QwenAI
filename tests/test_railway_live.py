@@ -85,7 +85,6 @@ def test_railway_ai_session_stream(bearer_token):
 
 @pytest.mark.live_railway
 def test_railway_food_categories_then_groq_recipes(bearer_token):
-    """Vision scan → items with identification_groups (or manual fallback) → confirm → Groq recipes."""
     headers = {'Authorization': f'Bearer {bearer_token}'}
     img, mime = _test_image_file()
     ext = 'jpg' if 'jpeg' in mime else 'png'
@@ -108,7 +107,7 @@ def test_railway_food_categories_then_groq_recipes(bearer_token):
         assert r.status_code == 200
         sess = r.json()
         if not sess.get('items'):
-            body = {'name': 'Test tomato', 'freshness': 7, 'qty': '3', 'unit': None, 'identification_group_codes': ['produce']}
+            body = {'name': 'Test tomato', 'freshness': 4, 'qty': '3', 'unit': None, 'identification_group_codes': ['produce']}
             r2 = client.post(f'/ai/sessions/{sid}/items', headers=headers, json=body)
             assert r2.status_code == 201, r2.text
             r = client.get(f'/ai/sessions/{sid}', headers=headers)
