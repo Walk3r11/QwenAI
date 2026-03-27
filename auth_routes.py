@@ -8,6 +8,7 @@ from models import User
 from schemas import (
     AuthResponse,
     ChangePasswordRequest,
+    GoogleAuthRequest,
     LoginRequest,
     SignupRequest,
     UpdateProfileRequest,
@@ -82,6 +83,49 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
         
     if not user.is_verified:
         raise HTTPException(status_code=403, detail="Email not verified. Please verify your email first.")
+
+    token = create_access_token(user.id)
+    return AuthResponse(access_token=token, token_type="bearer", user=user)
+
+
+@router.post("/google", response_model=AuthResponse)
+def google_auth(payload: GoogleAuthRequest, db: Session = Depends(get_db)):
+    from google.oauth2 import id_token
+    from google.auth.transport import requests
+    import os
+
+    WEB_CLIENT_ID = os.environ.get("GOOGLE_WEB_CLIENT_ID", "")
+    
+    try:
+        idinfo = id_token.verify_oauth2_token(payload.id_token, requests.Request(), WEB_CLIENT_ID)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid Google token.")
+
+    email = idinfo.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="Google token does not contain an email.")
+
+    user = db.scalar(select(User).where(User.email == email.lower()))
+    if not user:
+        # Create user automatically
+        name = idinfo.get("name", "SnapChef User")
+        # Generate a random impossible password so they can't login via normal password route
+        import uuid
+        user = User(
+            email=email.lower(),
+            name=name.strip(),
+            hashed_password=hash_password(str(uuid.uuid4())),
+            verification_code=None,
+            is_verified=True
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    elif not user.is_verified:
+        # If they previously tried to sign up but didn't verify, verifying via Google overrides it
+        user.is_verified = True
+        user.verification_code = None
+        db.commit()
 
     token = create_access_token(user.id)
     return AuthResponse(access_token=token, token_type="bearer", user=user)
