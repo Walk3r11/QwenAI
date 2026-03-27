@@ -1,13 +1,15 @@
+import asyncio
 import base64
 import io
 import json
 import os
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from typing import List, cast
 import requests
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from PIL import Image
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, selectinload
@@ -21,6 +23,25 @@ from security import get_current_user
 router = APIRouter(prefix='/ai', tags=['ai'])
 THUMB_MAX = 1080
 _SESSION_EAGER = (selectinload(ScanSession.images), selectinload(ScanSession.items).selectinload(ScanItem.identification_links).selectinload(ScanItemIdentification.group), selectinload(ScanSession.recipes))
+LLAMA_503_MAX_RETRIES = int(os.getenv('LLAMA_503_MAX_RETRIES', '36'))
+LLAMA_503_SLEEP_SEC = float(os.getenv('LLAMA_503_SLEEP_SEC', '5'))
+
+def _request_llama_stream(payload: dict):
+    last_body = ''
+    for _ in range(LLAMA_503_MAX_RETRIES):
+        try:
+            resp = requests.post(LLAMA_URL, json=payload, timeout=LLAMA_HTTP_TIMEOUT, stream=True)
+        except requests.RequestException as e:
+            return None, e
+        if resp.status_code == 503:
+            last_body = resp.text or ''
+            resp.close()
+            if any(x in last_body.lower() for x in ('loading', 'load', 'unavailable', 'not ready')):
+                time.sleep(LLAMA_503_SLEEP_SEC)
+                continue
+            return resp, None
+        return resp, None
+    return None, RuntimeError(f'Llama stayed busy (503) after {LLAMA_503_MAX_RETRIES} retries: {last_body[:800]}')
 
 def _normalize_identification_codes(raw) -> list[str]:
     if not raw:
@@ -277,7 +298,7 @@ def _session_to_out(session: ScanSession) -> ScanSessionOut:
 MAX_SCAN_UPLOADS = 50
 
 @router.post('/sessions')
-async def create_session(files: List[UploadFile]=File(...), user: User=Depends(get_current_user)):
+async def create_session(files: List[UploadFile]=File(...), buffer: bool=Query(False, description='If true, return one JSON when the scan finishes (avoids long-lived chunked streams through proxies).'), user: User=Depends(get_current_user)):
     if not _model_ready():
         raise HTTPException(status_code=503, detail='Model files not ready.')
     if len(files) < 1 or len(files) > MAX_SCAN_UPLOADS:
@@ -315,10 +336,12 @@ async def create_session(files: List[UploadFile]=File(...), user: User=Depends(g
             data_url = f'data:{mime};base64,{b64}'
             content_parts.append({'type': 'image_url', 'image_url': {'url': data_url}})
         payload = {'model': LLAMA_MODEL, 'stream': True, 'max_tokens': 1024, 'temperature': 0.2, 'frequency_penalty': 0.8, 'messages': [{'role': 'user', 'content': content_parts}]}
-        try:
-            resp = requests.post(LLAMA_URL, json=payload, timeout=LLAMA_HTTP_TIMEOUT, stream=True)
-        except requests.RequestException as e:
-            yield (json.dumps({'status': 'error', 'detail': str(e)}) + '\n')
+        resp, err = _request_llama_stream(payload)
+        if err is not None:
+            yield (json.dumps({'status': 'error', 'detail': str(err)}) + '\n')
+            return
+        if resp is None:
+            yield (json.dumps({'status': 'error', 'detail': 'No response from vision server.'}) + '\n')
             return
         if resp.status_code >= 400:
             yield (json.dumps({'status': 'error', 'detail': resp.text}) + '\n')
@@ -370,6 +393,24 @@ async def create_session(files: List[UploadFile]=File(...), user: User=Depends(g
             yield (json.dumps({'status': 'error', 'detail': f'DB error: {e}'}) + '\n')
         finally:
             db.close()
+    if buffer:
+
+        def _drain():
+            return list(_stream())
+
+        chunks = await asyncio.to_thread(_drain)
+        if not chunks:
+            raise HTTPException(status_code=502, detail='Scan produced no output.')
+        last_raw = chunks[-1].strip()
+        try:
+            data = json.loads(last_raw)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=502, detail=f'Invalid final JSON: {last_raw[:400]}') from None
+        if data.get('status') == 'error':
+            raise HTTPException(status_code=502, detail=str(data.get('detail', data)))
+        if data.get('status_msg') != 'done' or data.get('id') is None:
+            raise HTTPException(status_code=502, detail=data)
+        return JSONResponse(content=data)
     return StreamingResponse(_stream(), media_type='application/x-ndjson')
 
 @router.get('/sessions', response_model=list[ScanSessionOut])
@@ -493,10 +534,12 @@ def generate_recipes(session_id: int, user: User=Depends(get_current_user), db: 
         yield (json.dumps({'status': 'generating_recipes'}) + '\n')
         prompt = f'{RECIPE_PROMPT}\n\nAvailable items: {items_text}'
         payload = {'model': LLAMA_MODEL, 'stream': True, 'max_tokens': 1024, 'temperature': 0.3, 'frequency_penalty': 0.6, 'messages': [{'role': 'user', 'content': prompt}]}
-        try:
-            resp = requests.post(LLAMA_URL, json=payload, timeout=LLAMA_HTTP_TIMEOUT, stream=True)
-        except requests.RequestException as e:
-            yield (json.dumps({'status': 'error', 'detail': str(e)}) + '\n')
+        resp, err = _request_llama_stream(payload)
+        if err is not None:
+            yield (json.dumps({'status': 'error', 'detail': str(err)}) + '\n')
+            return
+        if resp is None:
+            yield (json.dumps({'status': 'error', 'detail': 'No response from model server.'}) + '\n')
             return
         if resp.status_code >= 400:
             yield (json.dumps({'status': 'error', 'detail': resp.text}) + '\n')
