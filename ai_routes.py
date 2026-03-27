@@ -408,7 +408,7 @@ async def create_session(files: List[UploadFile]=File(...), buffer: bool=Query(F
             b64 = base64.b64encode(raw_bytes).decode('ascii')
             data_url = f'data:{mime};base64,{b64}'
             content_parts.append({'type': 'image_url', 'image_url': {'url': data_url}})
-        payload = {'model': LLAMA_MODEL, 'stream': True, 'max_tokens': 1024, 'temperature': 0.2, 'frequency_penalty': 0.8, 'messages': [{'role': 'user', 'content': content_parts}]}
+        payload = {'model': LLAMA_MODEL, 'stream': True, 'max_tokens': VISION_MAX_TOKENS, 'temperature': 0.2, 'frequency_penalty': 0.8, 'messages': [{'role': 'user', 'content': content_parts}]}
         resp, err = _request_llama_stream(payload)
         if err is not None:
             yield (json.dumps({'status': 'error', 'detail': str(err)}) + '\n')
