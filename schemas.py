@@ -147,6 +147,7 @@ class GroupOut(BaseModel):
     name: str
     created_by_user_id: int
     created_at: datetime
+    code: str | None = None
 
     class Config:
         from_attributes = True

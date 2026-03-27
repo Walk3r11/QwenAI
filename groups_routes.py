@@ -42,6 +42,7 @@ def create_group(payload: GroupCreateRequest, db: Session=Depends(get_db), curre
     else:
         raise HTTPException(status_code=500, detail='Failed to create join code.')
     db.refresh(group)
+    group.code = code
     return group
 
 @router.delete('/{group_id}', status_code=status.HTTP_204_NO_CONTENT)
