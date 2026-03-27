@@ -40,9 +40,10 @@ def _extract_json_text(raw: str) -> str:
 
 def _call_recipe_model(items: list[str]) -> tuple[str, str | None, list[str], list[str]]:
     prompt = (
-        'Create one practical recipe using these ingredients as much as possible. '
+        'These ingredients are everything the group has on hand (no shopping). '
+        'One new leftover-friendly meal using ONLY this list; combine creatively. '
         'Return strict JSON only: {"title":string,"description":string|null,"ingredients":[string],"steps":[string]}. '
-        'Keep title under 90 chars, ingredients max 20, steps max 10.'
+        'Ingredients must be from the given list only. Title under 90 chars, ingredients max 20, steps max 10.'
     )
     payload = {'model': LLAMA_MODEL, 'stream': False, 'messages': [{'role': 'user', 'content': f'{prompt}\nIngredients: {", ".join(items)}'}], 'temperature': 0.2, 'response_format': {'type': 'json_object'}}
     r = requests.post(LLAMA_URL, json=payload, timeout=120)

@@ -49,19 +49,20 @@ def _default_scan_prompt() -> str:
     )
 
 SCAN_PROMPT = os.getenv('SCAN_PROMPT') or _default_scan_prompt()
-RECIPE_PROMPT = os.getenv('RECIPE_PROMPT', 'You are a zero-waste recipe generator. Given these pantry items, suggest 2-3 recipes that maximize usage of available ingredients, prioritizing items marked as \'use-soon\' or \'expiring\'. Each recipe should be practical and quick. Return ONLY valid JSON: {"recipes": [{"name": str, "uses": [str], "extra": [str], "steps": [str], "minutes": int}]}')
+RECIPE_PROMPT = os.getenv('RECIPE_PROMPT', 'You turn ONLY what the user already has (this exact list from their scan photos — leftovers and odds and ends) into NEW dishes. Do not assume they can shop. Every ingredient in the dish must be drawn from the list; "uses" must name items from that list only. Set "extra" to [] (empty). Prefer combining leftovers creatively (bowls, hashes, soups, wraps, fried rice-style mixes, salads) using solely these foods. Prioritize lower freshness numbers first. Return ONLY valid JSON: {"recipes": [{"name": str, "uses": [str], "extra": [str], "steps": [str], "minutes": int}]}')
 GROQ_API_KEY = os.getenv('GROQ_API_KEY', '').strip()
 GROQ_MODEL = os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile')
 GROQ_CHAT_URL = os.getenv('GROQ_CHAT_URL', 'https://api.groq.com/openai/v1/chat/completions')
-GROQ_SYSTEM_PROMPT = os.getenv('GROQ_SYSTEM_PROMPT', 'You are an expert home cook and recipe writer. You give practical, safe cooking advice. Use well-known techniques and flavor pairings from general culinary knowledge. You do not browse the web; rely on established cooking knowledge only. Always respond with a single valid JSON object, no markdown.')
+GROQ_SYSTEM_PROMPT = os.getenv('GROQ_SYSTEM_PROMPT', 'You are an expert home cook. The user lists ONLY foods detected from their fridge/pantry photos — that is their entire inventory. You invent new meals and leftover makeovers using those ingredients alone. Never assume they can buy anything. "extra" in each recipe must always be []. "uses" must only reference names from their list. Safe techniques only. Respond with one valid JSON object, no markdown.')
 def _default_groq_recipe_user_prompt() -> str:
     mn, mx = FRESHNESS_MIN, FRESHNESS_MAX
     p = GROQ_RECIPE_PRIORITIZE_BELOW
     return (
-        f'Given these ingredients from a user\'s kitchen scan (name, freshness {mn}-{mx} where lower means use urgently, qty):\n{{items}}\n\n'
-        f'Suggest 3 to 4 creative but realistic recipes that use as many of these ingredients as possible. Prioritize ingredients with freshness {p} or below. '
-        'For each recipe include: name, uses (ingredients from their list that the recipe uses), extra (other ingredients they may need to buy), steps (short numbered-style strings), minutes (total time int). '
-        'Return JSON exactly in this shape: {"recipes": [{"name": "string", "uses": ["string"], "extra": ["string"], "steps": ["string"], "minutes": 30}]}'
+        f'These are the ONLY foods the user has right now (from photos they scanned; name, freshness {mn}-{mx} lower = use first, qty):\n{{items}}\n\n'
+        f'Propose 3 or 4 NEW dishes made strictly from this list — leftover-friendly (recombine, repurpose, one-pan, bowl, soup, wrap, hash, salad). '
+        f'Use up items with freshness {p} or below first. '
+        'Each recipe: "name", "uses" (subset of the listed food names only), "extra" must be [] always, "steps" (short strings), "minutes" (int). '
+        'Do not add ingredients they do not have. Return JSON: {"recipes": [{"name": "string", "uses": ["string"], "extra": [], "steps": ["string"], "minutes": 30}]}'
     )
 
 GROQ_RECIPE_USER_PROMPT = os.getenv('GROQ_RECIPE_USER_PROMPT') or _default_groq_recipe_user_prompt()
