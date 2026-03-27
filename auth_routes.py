@@ -2,7 +2,7 @@ import re
 import secrets
 import uuid
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -51,7 +51,7 @@ def pc_scan_token(authorization: str | None=Header(default=None), db: Session=De
 
 
 @router.post('/signup', response_model=SignupResponse | AuthResponse, status_code=status.HTTP_201_CREATED)
-def signup(payload: SignupRequest, db: Session=Depends(get_db)):
+def signup(payload: SignupRequest, background_tasks: BackgroundTasks, db: Session=Depends(get_db)):
     em = payload.email.lower()
     instant = _instant_signup_email(em)
     existing = db.scalar(select(User).where(User.email == em))
@@ -72,8 +72,7 @@ def signup(payload: SignupRequest, db: Session=Depends(get_db)):
         existing.hashed_password = hash_password(payload.password)
         existing.verification_code = code
         db.commit()
-        if not send_verification_email(existing.email, existing.name, code):
-            raise HTTPException(status_code=503, detail='Failed to send verification email. Check SMTP settings.')
+        background_tasks.add_task(send_verification_email, existing.email, existing.name, code)
         return SignupResponse(message='Verification email resent.', email=existing.email)
     user = User(email=em, name=payload.name.strip(), hashed_password=hash_password(payload.password), verification_code=None if instant else code, is_verified=bool(instant))
     db.add(user)
@@ -82,8 +81,7 @@ def signup(payload: SignupRequest, db: Session=Depends(get_db)):
     if instant:
         tok = create_access_token(user.id)
         return AuthResponse(access_token=tok, token_type='bearer', user=UserOut.model_validate(user))
-    if not send_verification_email(user.email, user.name, code):
-        raise HTTPException(status_code=503, detail='Failed to send verification email. Check SMTP settings.')
+    background_tasks.add_task(send_verification_email, user.email, user.name, code)
     return SignupResponse(message='Verification email sent.', email=user.email)
 
 
