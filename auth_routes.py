@@ -152,7 +152,7 @@ def google_auth(payload: GoogleAuthRequest, db: Session = Depends(get_db)):
         db.commit()
 
     token = create_access_token(user.id)
-    return AuthResponse(access_token=token, token_type="bearer", user=user)
+    return AuthResponse(access_token=token, token_type="bearer", user=UserOut.model_validate(user))
 
 
 
