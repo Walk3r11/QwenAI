@@ -67,3 +67,18 @@ def _default_groq_recipe_user_prompt() -> str:
     )
 
 GROQ_RECIPE_USER_PROMPT = os.getenv('GROQ_RECIPE_USER_PROMPT') or _default_groq_recipe_user_prompt()
+
+# Transactional email: Brevo REST API (preferred when BREVO_API_KEY is set) or SMTP.
+BREVO_API_KEY = os.getenv('BREVO_API_KEY', '').strip()
+BREVO_SENDER_EMAIL = os.getenv('BREVO_SENDER_EMAIL', '').strip()
+BREVO_SENDER_NAME = os.getenv('BREVO_SENDER_NAME', 'SnapChef').strip()
+
+SMTP_HOST = os.getenv('SMTP_HOST', 'smtp.gmail.com').strip()
+SMTP_PORT = int(os.getenv('SMTP_PORT', '587'))
+SMTP_USER = os.getenv('SMTP_USER', os.getenv('SMTP_EMAIL', '')).strip()
+SMTP_PASSWORD = os.getenv('SMTP_PASSWORD', '').strip()
+SMTP_FROM_EMAIL = os.getenv('SMTP_FROM_EMAIL', '').strip() or SMTP_USER
+SMTP_FROM_NAME = os.getenv('SMTP_FROM_NAME', 'SnapChef').strip()
+SMTP_USE_TLS = os.getenv('SMTP_USE_TLS', 'true').strip().lower() in {'1', 'true', 'yes', 'on'}
+SMTP_USE_SSL = os.getenv('SMTP_USE_SSL', 'false').strip().lower() in {'1', 'true', 'yes', 'on'}
+SMTP_TIMEOUT_SEC = int(os.getenv('SMTP_TIMEOUT_SEC', '20'))
