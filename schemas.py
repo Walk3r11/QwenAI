@@ -15,6 +15,13 @@ class LoginRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
 
+class VerifyRequest(BaseModel):
+    email: EmailStr
+    code: str = Field(min_length=6, max_length=6)
+
+class SignupResponse(BaseModel):
+    message: str
+    email: str
 
 class UserOut(BaseModel):
     id: int

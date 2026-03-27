@@ -25,6 +25,8 @@ class User(Base):
     )
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_verified: Mapped[bool] = mapped_column(default=False, nullable=False)
+    verification_code: Mapped[str | None] = mapped_column(String(6), nullable=True)
     created_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

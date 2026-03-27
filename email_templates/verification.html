@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: 'Inter', Arial, sans-serif; background-color: #f6fdf8; margin: 0; padding: 0; }
+        .container { max-width: 600px; margin: 40px auto; background: white; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+        .header { background: #37b76c; padding: 32px; text-align: center; }
+        .header h1 { color: white; margin: 0; font-size: 28px; letter-spacing: 1px; }
+        .content { padding: 40px 32px; text-align: center; }
+        .greeting { font-size: 22px; color: #1a1a1a; margin-bottom: 12px; font-weight: 600; }
+        .instruction { font-size: 16px; color: #4a4a4a; line-height: 1.6; margin-bottom: 32px; }
+        .code-box { background: #f0faf4; border: 2px dashed #37b76c; border-radius: 12px; padding: 24px; margin: 0 auto; display: inline-block; }
+        .code { font-size: 36px; font-weight: 800; color: #2e9659; letter-spacing: 6px; margin: 0; font-family: 'Courier New', monospace; }
+        .footer { background: #fafafa; padding: 24px; text-align: center; font-size: 14px; color: #888; border-top: 1px solid #efefef; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>SnapChef</h1>
+        </div>
+        <div class="content">
+            <div class="greeting">Welcome to the Kitchen, {{ name }}! 👨‍🍳</div>
+            <div class="instruction">
+                We're thrilled to have you! Before you start snapping ingredients, we just need to verify your email address. Please enter the code below into the app:
+            </div>
+            <div class="code-box">
+                <p class="code">{{ code }}</p>
+            </div>
+            <p style="margin-top: 32px; color: #666; font-size: 14px;">If you didn't request this email, you can safely ignore it.</p>
+        </div>
+        <div class="footer">
+            &copy; 2026 SnapChef Team. All rights reserved.
+        </div>
+    </div>
+</body>
+</html>
