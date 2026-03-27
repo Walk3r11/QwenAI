@@ -132,12 +132,8 @@ def get_token(base: str, email: str | None, password: str | None, health: dict) 
             sys.exit(1)
         return r.json()['access_token']
 
-    if not health.get('allow_pc_script_signup'):
-        print(
-            'Set ALLOW_PC_SCRIPT_SIGNUP=true on Railway (Variables) and redeploy so /auth/signup accepts pc_<hex>@example.com with a JWT, '
-            'or set RAILWAY_PC_SCAN_SECRET / RAILWAY_EMAIL+PASSWORD / RAILWAY_BEARER_TOKEN.',
-            file=sys.stderr,
-        )
+    if health.get('allow_pc_script_signup') is False:
+        print('Server has ALLOW_PC_SCRIPT_SIGNUP disabled; enable it or use RAILWAY_EMAIL+PASSWORD / RAILWAY_BEARER_TOKEN / RAILWAY_PC_SCAN_SECRET.', file=sys.stderr)
         sys.exit(1)
 
     for _ in range(8):
@@ -151,9 +147,19 @@ def get_token(base: str, email: str | None, password: str | None, health: dict) 
             sys.exit(1)
         if sr.status_code == 201:
             data = sr.json()
-            if data.get('access_token'):
-                return data['access_token']
-            print('Signup returned no JWT. Set ALLOW_PC_SCRIPT_SIGNUP=true on the API and redeploy.', file=sys.stderr)
+            tok = data.get('access_token')
+            if tok:
+                return tok
+            print(f'POST {base}/auth/login ({em})…', file=sys.stderr)
+            try:
+                lr = requests.post(f'{base}/auth/login', json={'email': em, 'password': pw}, timeout=t)
+            except (requests.exceptions.ConnectTimeout, requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as e:
+                print(f'{e}', file=sys.stderr)
+                sys.exit(1)
+            if lr.status_code == 200:
+                return lr.json()['access_token']
+            print(f'Account created but login failed {lr.status_code}: {lr.text[:400]}', file=sys.stderr)
+            print('Deploy latest API (pc_*@example.com instant signup defaults on) or verify email for normal signup.', file=sys.stderr)
             sys.exit(1)
         if sr.status_code != 409:
             print(f'Signup failed {sr.status_code}: {sr.text[:400]}', file=sys.stderr)
