@@ -2,7 +2,9 @@ import base64
 import io
 import json
 import os
+import queue
 import re
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from typing import List, cast
@@ -12,13 +14,13 @@ from fastapi.responses import StreamingResponse
 from PIL import Image
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, selectinload
-from config import GROQ_RECIPE_USER_PROMPT, GROQ_SYSTEM_PROMPT, LLAMA_HTTP_TIMEOUT, LLAMA_MODEL, LLAMA_URL, MODEL_DIR, RECIPE_PROMPT, SCAN_PROMPT, VISION_MAX_TOKENS
+from config import GROQ_RECIPE_USER_PROMPT, GROQ_SYSTEM_PROMPT, LLAMA_HTTP_TIMEOUT, LLAMA_MODEL, LLAMA_URL, MODEL_DIR, RECIPE_PROMPT, SCAN_PROMPT, SCAN_STREAM_HEARTBEAT_SEC, VISION_MAX_TOKENS
 from identification_data import KNOWN_IDENTIFICATION_CODES
 from db import SessionLocal, get_db
 from groq_client import groq_chat_json, groq_configured
 from models import FreshnessRef, IngredientIdentificationGroup, PantryItem, ScanImage, ScanItem, ScanItemIdentification, ScanSession, SessionRecipe, TrainingImage, User
 from schemas import AddItemRequest, EditItemRequest, GroqRecipesBatchOut, IdentificationGroupOut, RateRequest, ScanImageOut, ScanItemOut, ScanSessionOut, SessionRecipeOut, TrainingImageOut, TrainingStatsOut
-from security import get_current_user
+from security import get_current_user, get_current_user_id_for_stream
 router = APIRouter(prefix='/ai', tags=['ai'])
 THUMB_MAX = 1080
 _SESSION_EAGER = (selectinload(ScanSession.images), selectinload(ScanSession.items).selectinload(ScanItem.identification_links).selectinload(ScanItemIdentification.group), selectinload(ScanSession.recipes))
@@ -285,7 +287,7 @@ def _collect_streamed_with_progress(resp: requests.Response):
             if content:
                 chunks.append(content)
                 token_count += 1
-                if token_count % 20 == 0:
+                if token_count % 8 == 0:
                     yield (token_count, None)
         except (json.JSONDecodeError, KeyError, IndexError):
             continue
@@ -370,7 +372,7 @@ def _session_to_out(session: ScanSession) -> ScanSessionOut:
 MAX_SCAN_UPLOADS = 50
 
 @router.post('/sessions')
-async def create_session(files: List[UploadFile]=File(...), user: User=Depends(get_current_user)):
+async def create_session(files: List[UploadFile]=File(...), user_id: int=Depends(get_current_user_id_for_stream)):
     if not _model_ready():
         raise HTTPException(status_code=503, detail='Model files not ready.')
     if len(files) < 1 or len(files) > MAX_SCAN_UPLOADS:
@@ -383,7 +385,6 @@ async def create_session(files: List[UploadFile]=File(...), user: User=Depends(g
         if not raw:
             raise HTTPException(status_code=400, detail=f"File '{f.filename}' is empty.")
         image_data.append((raw, f.content_type))
-    user_id = user.id
 
     def _stream():
         yield (json.dumps({'status': 'processing', 'images': len(image_data)}) + '\n')
@@ -398,7 +399,8 @@ async def create_session(files: List[UploadFile]=File(...), user: User=Depends(g
         if freshness_ctx:
             prompt_text += freshness_ctx
         content_parts.append({'type': 'text', 'text': prompt_text})
-        for raw_bytes, mime in image_data:
+        n_img = len(image_data)
+        for idx, (raw_bytes, mime) in enumerate(image_data):
             try:
                 thumb = _make_thumbnail(raw_bytes, mime)
                 thumbnails.append((thumb, mime))
@@ -407,6 +409,8 @@ async def create_session(files: List[UploadFile]=File(...), user: User=Depends(g
             b64 = base64.b64encode(raw_bytes).decode('ascii')
             data_url = f'data:{mime};base64,{b64}'
             content_parts.append({'type': 'image_url', 'image_url': {'url': data_url}})
+            yield (json.dumps({'status': 'generating', 'phase': 'image', 'index': idx + 1, 'total': n_img}) + '\n')
+        yield (json.dumps({'status': 'generating', 'phase': 'llama'}) + '\n')
         payload = {'model': LLAMA_MODEL, 'stream': True, 'max_tokens': VISION_MAX_TOKENS, 'temperature': 0.2, 'frequency_penalty': 0.8, 'messages': [{'role': 'user', 'content': content_parts}]}
         resp, err = _request_llama_stream(payload)
         if err is not None:
@@ -419,11 +423,50 @@ async def create_session(files: List[UploadFile]=File(...), user: User=Depends(g
             yield (json.dumps({'status': 'error', 'detail': resp.text}) + '\n')
             return
         raw_text = None
-        for token_count, final_text in _collect_streamed_with_progress(resp):
-            if final_text is None:
-                yield (json.dumps({'status': 'generating', 'tokens': token_count}) + '\n')
-            else:
-                raw_text = final_text
+        hb = SCAN_STREAM_HEARTBEAT_SEC
+        if hb > 0:
+            q_ll: queue.Queue = queue.Queue()
+
+            def _llama_worker():
+                try:
+                    for token_count, final_text in _collect_streamed_with_progress(resp):
+                        if final_text is None:
+                            q_ll.put(('tick', token_count))
+                        else:
+                            q_ll.put(('final', final_text))
+                except Exception as e:
+                    q_ll.put(('error', str(e)))
+                finally:
+                    try:
+                        resp.close()
+                    except Exception:
+                        pass
+                    q_ll.put(('stop', None))
+
+            threading.Thread(target=_llama_worker, daemon=True).start()
+            while True:
+                try:
+                    msg = q_ll.get(timeout=hb)
+                except queue.Empty:
+                    yield (json.dumps({'status': 'generating', 'keepalive': True}) + '\n')
+                    continue
+                kind, data = msg
+                if kind == 'stop':
+                    break
+                if kind == 'error':
+                    yield (json.dumps({'status': 'error', 'detail': f'Llama stream read failed: {data}'}) + '\n')
+                    return
+                if kind == 'tick':
+                    yield (json.dumps({'status': 'generating', 'tokens': data}) + '\n')
+                if kind == 'final':
+                    raw_text = data
+                    break
+        else:
+            for token_count, final_text in _collect_streamed_with_progress(resp):
+                if final_text is None:
+                    yield (json.dumps({'status': 'generating', 'tokens': token_count}) + '\n')
+                else:
+                    raw_text = final_text
         if not raw_text:
             yield (json.dumps({'status': 'error', 'detail': 'Empty response from model.'}) + '\n')
             return
@@ -570,19 +613,22 @@ def confirm_session(session_id: int, user: User=Depends(get_current_user), db: S
     return _session_to_out(row)
 
 @router.post('/sessions/{session_id}/recipes')
-def generate_recipes(session_id: int, user: User=Depends(get_current_user), db: Session=Depends(get_db)):
-    session = db.scalar(select(ScanSession).where(ScanSession.id == session_id, ScanSession.user_id == user.id).options(selectinload(ScanSession.items)))
-    if not session:
-        raise HTTPException(status_code=404, detail='Session not found.')
-    if session.status != 'confirmed':
-        raise HTTPException(status_code=409, detail='Confirm the session first.')
-    if not session.items:
-        raise HTTPException(status_code=400, detail='No items in session.')
+def generate_recipes(session_id: int, user_id: int=Depends(get_current_user_id_for_stream)):
     if not _model_ready():
         raise HTTPException(status_code=503, detail='Model files not ready.')
-    items_text = ', '.join((f'{i.name} ({i.freshness}, qty: {i.qty})' for i in session.items))
-    user_id = user.id
-    sess_id = session.id
+    db = SessionLocal()
+    try:
+        session = db.scalar(select(ScanSession).where(ScanSession.id == session_id, ScanSession.user_id == user_id).options(selectinload(ScanSession.items)))
+        if not session:
+            raise HTTPException(status_code=404, detail='Session not found.')
+        if session.status != 'confirmed':
+            raise HTTPException(status_code=409, detail='Confirm the session first.')
+        if not session.items:
+            raise HTTPException(status_code=400, detail='No items in session.')
+        items_text = ', '.join((f'{i.name} ({i.freshness}, qty: {i.qty})' for i in session.items))
+        sess_id = session.id
+    finally:
+        db.close()
 
     def _stream():
         yield (json.dumps({'status': 'generating_recipes'}) + '\n')
