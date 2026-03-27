@@ -1,6 +1,5 @@
 import json
 import os
-import uuid
 from io import BytesIO
 from pathlib import Path
 from typing import Tuple
@@ -37,14 +36,10 @@ def _test_image_file() -> Tuple[bytes, str]:
 def bearer_token():
     if (t := os.environ.get('RAILWAY_BEARER_TOKEN')):
         return t.strip()
-    suffix = uuid.uuid4().hex[:14]
-    email = f'snapchef_live_{suffix}@example.com'
-    password = f'RwTest_{suffix}9Aa!'
-    with httpx.Client(base_url=BASE, timeout=30.0) as client:
-        r = client.post('/auth/signup', json={'email': email, 'name': 'Railway Live Test', 'password': password})
-        if r.status_code not in (200, 201):
-            pytest.fail(f'Signup failed: {r.status_code} {r.text[:500]}')
-        return r.json()['access_token']
+    pytest.skip(
+        'Set RAILWAY_BEARER_TOKEN to a JWT from a verified account (login after /auth/verify). '
+        'Sign-up returns a verification flow, not a token.'
+    )
 
 def test_railway_health():
     with httpx.Client(base_url=BASE, timeout=30.0) as client:

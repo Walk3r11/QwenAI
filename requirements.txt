@@ -9,5 +9,6 @@ python-jose[cryptography]
 bcrypt
 email-validator
 Pillow
+jinja2
 
 # Dev/tests + IDE stubs: pip install -r requirements-dev.txt

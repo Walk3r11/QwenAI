@@ -70,6 +70,29 @@ def _upgrade_pantry_items_postgres(conn) -> None:
             conn.rollback()
 
 
+def _upgrade_users_verification_postgres(conn) -> None:
+    if not conn.execute(text("SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'users'")).first():
+        return
+    cols = _pg_table_columns(conn, 'users')
+    if 'is_verified' not in cols:
+        conn.execute(text('ALTER TABLE users ADD COLUMN is_verified BOOLEAN NOT NULL DEFAULT true'))
+        conn.commit()
+    if 'verification_code' not in cols:
+        conn.execute(text('ALTER TABLE users ADD COLUMN verification_code VARCHAR(6)'))
+        conn.commit()
+
+
+def _upgrade_users_verification_sqlite(conn) -> None:
+    rows = conn.execute(text("PRAGMA table_info(users)")).fetchall()
+    cols = {r[1] for r in rows}
+    if 'is_verified' not in cols:
+        conn.execute(text('ALTER TABLE users ADD COLUMN is_verified BOOLEAN DEFAULT 1 NOT NULL'))
+        conn.commit()
+    if 'verification_code' not in cols:
+        conn.execute(text('ALTER TABLE users ADD COLUMN verification_code VARCHAR(6)'))
+        conn.commit()
+
+
 @app.on_event('startup')
 def on_startup():
     if engine.dialect.name == 'postgresql':
@@ -88,7 +111,11 @@ def on_startup():
     Base.metadata.create_all(bind=engine)
     if engine.dialect.name == 'postgresql':
         with engine.connect() as conn:
+            _upgrade_users_verification_postgres(conn)
             _upgrade_pantry_items_postgres(conn)
+    elif engine.dialect.name == 'sqlite':
+        with engine.connect() as conn:
+            _upgrade_users_verification_sqlite(conn)
     with SessionLocal() as db:
         from identification_seed import ensure_identification_groups
         try:

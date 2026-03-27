@@ -13,6 +13,14 @@ class LoginRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
 
+class VerifyRequest(BaseModel):
+    email: EmailStr
+    code: str = Field(min_length=6, max_length=6)
+
+class SignupResponse(BaseModel):
+    message: str
+    email: str
+
 class UserOut(BaseModel):
     id: int
     email: EmailStr
@@ -119,6 +127,15 @@ class TrainingStatsOut(BaseModel):
     unique_products: int
     products: list[dict]
 
+class UpdateProfileRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=8, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
 class GroupCreateRequest(BaseModel):
     name: str = Field(min_length=2, max_length=120)
 
@@ -199,3 +216,39 @@ class SharePostOut(BaseModel):
     note: str | None
     created_at: datetime
     items: list[PantryItemOut] = []
+
+
+class LegacyImageScanItemOut(BaseModel):
+    name: str
+    quantity: float | None = None
+    unit: str | None = None
+    confidence: float | None = None
+    expires_at: datetime | None = None
+
+
+class ImageScanResponse(BaseModel):
+    items: list[LegacyImageScanItemOut] = []
+    raw: str | None = None
+
+
+class LegacyIngredientAnalysisRequest(BaseModel):
+    imageBase64: str = Field(min_length=8)
+
+
+class LegacyIngredientAnalysisResponse(BaseModel):
+    ingredients: list[str]
+
+
+class LegacyRecipeGenerationRequest(BaseModel):
+    ingredients: list[str] = Field(default_factory=list, max_length=100)
+
+
+class LegacyRecipeOut(BaseModel):
+    id: str
+    title: str
+    instructions: list[str]
+    imageUrl: str | None = None
+
+
+class LegacyRecipeResponse(BaseModel):
+    recipes: list[LegacyRecipeOut]
