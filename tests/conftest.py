@@ -5,6 +5,7 @@ import tempfile
 from pathlib import Path
 _root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_root))
+os.environ['QWENAI_TESTING'] = '1'
 os.environ.setdefault('DATABASE_URL', 'sqlite:///:memory:')
 os.environ.setdefault('JWT_SECRET', 'test-secret-key-at-least-32-characters-long')
 os.environ.setdefault('ENABLE_AI', 'true')
@@ -39,22 +40,23 @@ def auth_headers(client):
     email = 'test-ai@example.com'
     password = 'Testpass123'
     r = client.post('/auth/signup', json={'email': email, 'name': 'AI Tester', 'password': password})
+    if r.status_code == 201:
+        data = r.json()
+        if data.get('access_token'):
+            return {'Authorization': f'Bearer {data["access_token"]}'}
+        with SessionLocal() as db:
+            u = db.scalar(select(User).where(User.email == email))
+            assert u and u.verification_code
+            code = u.verification_code
+        vr = client.post('/auth/verify', json={'email': email, 'code': code})
+        assert vr.status_code == 200, vr.text
+        return {'Authorization': f'Bearer {vr.json()["access_token"]}'}
     if r.status_code == 409:
         with SessionLocal() as db:
             u = db.scalar(select(User).where(User.email == email))
             if u and not u.is_verified and u.verification_code:
                 client.post('/auth/verify', json={'email': email, 'code': u.verification_code})
-        r = client.post('/auth/login', json={'email': email, 'password': password})
-    else:
-        assert r.status_code == 201, r.text
-        with SessionLocal() as db:
-            u = db.scalar(select(User).where(User.email == email))
-            assert u and u.verification_code
-            code = u.verification_code
-        r = client.post('/auth/verify', json={'email': email, 'code': code})
-        assert r.status_code == 200, r.text
-    if r.status_code != 200:
-        r = client.post('/auth/login', json={'email': email, 'password': password})
-    assert r.status_code == 200, r.text
-    token = r.json()['access_token']
-    return {'Authorization': f'Bearer {token}'}
+        lr = client.post('/auth/login', json={'email': email, 'password': password})
+        assert lr.status_code == 200, lr.text
+        return {'Authorization': f'Bearer {lr.json()["access_token"]}'}
+    assert False, r.text
