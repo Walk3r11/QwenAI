@@ -44,6 +44,26 @@ def create_group(payload: GroupCreateRequest, db: Session=Depends(get_db), curre
     db.refresh(group)
     return group
 
+@router.delete('/{group_id}', status_code=status.HTTP_204_NO_CONTENT)
+def delete_group(group_id: int, db: Session=Depends(get_db), current_user: User=Depends(get_current_user)):
+    membership = _ensure_member(db, group_id, current_user.id)
+    if membership.role != 'owner':
+        raise HTTPException(status_code=403, detail='Only owners can delete the group.')
+    group = db.get(Group, group_id)
+    if group:
+        db.delete(group)
+        db.commit()
+    return None
+
+@router.post('/{group_id}/leave', status_code=status.HTTP_204_NO_CONTENT)
+def leave_group(group_id: int, db: Session=Depends(get_db), current_user: User=Depends(get_current_user)):
+    membership = _ensure_member(db, group_id, current_user.id)
+    if membership.role == 'owner':
+        raise HTTPException(status_code=400, detail='Owners cannot leave. Delete the group instead.')
+    db.delete(membership)
+    db.commit()
+    return None
+
 @router.get('', response_model=list[GroupOut])
 def list_my_groups(db: Session=Depends(get_db), current_user: User=Depends(get_current_user)):
     q = select(Group).join(GroupMember, GroupMember.group_id == Group.id).where(GroupMember.user_id == current_user.id).order_by(Group.created_at.desc())
