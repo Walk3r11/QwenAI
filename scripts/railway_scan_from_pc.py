@@ -85,15 +85,30 @@ def get_token(base: str, email: str | None, password: str | None) -> str:
         print('Using RAILWAY_BEARER_TOKEN (no login request).', file=sys.stderr)
         return raw.removeprefix('Bearer ').strip()
 
+    t = _auth_timeout()
+    pc = os.environ.get('RAILWAY_PC_SCAN_SECRET', '').strip()
+    if pc:
+        print(f'POST {base}/auth/pc-scan-token…', file=sys.stderr)
+        try:
+            pr = requests.post(f'{base}/auth/pc-scan-token', headers={'Authorization': f'Bearer {pc}'}, timeout=t)
+        except (requests.exceptions.ConnectTimeout, requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as e:
+            print(f'{e}', file=sys.stderr)
+            sys.exit(1)
+        if pr.status_code == 200:
+            return pr.json()['access_token']
+        if pr.status_code == 404:
+            print('Server has no PC_SCAN_SHARED_SECRET set (Railway Variables). Match RAILWAY_PC_SCAN_SECRET to the same value.', file=sys.stderr)
+            sys.exit(1)
+        print(f'pc-scan-token {pr.status_code}: {pr.text[:400]}', file=sys.stderr)
+        sys.exit(1)
+
     if not (email and password):
         print(
-            'Set RAILWAY_EMAIL and RAILWAY_PASSWORD in .env, or --email/--password, or RAILWAY_BEARER_TOKEN. '
-            'Production signup requires email verification.',
+            'Set RAILWAY_PC_SCAN_SECRET in .env (same value as PC_SCAN_SHARED_SECRET on Railway), or RAILWAY_EMAIL+PASSWORD / --email+--password, or RAILWAY_BEARER_TOKEN.',
             file=sys.stderr,
         )
         sys.exit(1)
 
-    t = _auth_timeout()
     print(f'POST {base}/auth/login (connect≤{t[0]:.0f}s read≤{t[1]:.0f}s)…', file=sys.stderr)
     try:
         r = requests.post(

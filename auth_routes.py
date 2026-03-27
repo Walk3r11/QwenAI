@@ -1,10 +1,11 @@
 import secrets
+import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from config import AUTH_SIGNUP_IMMEDIATE_TOKEN
+from config import AUTH_SIGNUP_IMMEDIATE_TOKEN, PC_SCAN_SHARED_SECRET
 from db import get_db
 from email_service import send_verification_email
 from models import User
@@ -21,6 +22,25 @@ from schemas import (
 from security import create_access_token, get_current_user, hash_password, verify_password
 
 router = APIRouter(prefix='/auth', tags=['auth'])
+
+
+@router.post('/pc-scan-token', response_model=AuthResponse)
+def pc_scan_token(authorization: str | None=Header(default=None), db: Session=Depends(get_db)):
+    if not PC_SCAN_SHARED_SECRET:
+        raise HTTPException(status_code=404, detail='Not Found')
+    got = (authorization or '').strip()
+    if got.startswith('Bearer '):
+        got = got[7:].strip()
+    if got != PC_SCAN_SHARED_SECRET:
+        raise HTTPException(status_code=401, detail='Unauthorized')
+    email = f'pc_{uuid.uuid4().hex}@example.com'
+    pw = secrets.token_urlsafe(32)
+    user = User(email=email, name='PC scan', hashed_password=hash_password(pw), is_verified=True, verification_code=None)
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    tok = create_access_token(user.id)
+    return AuthResponse(access_token=tok, token_type='bearer', user=UserOut.model_validate(user))
 
 
 @router.post('/signup', response_model=SignupResponse | AuthResponse, status_code=status.HTTP_201_CREATED)
