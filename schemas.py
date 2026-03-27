@@ -17,6 +17,9 @@ class VerifyRequest(BaseModel):
     email: EmailStr
     code: str = Field(min_length=6, max_length=6)
 
+class GoogleAuthRequest(BaseModel):
+    id_token: str
+
 class SignupResponse(BaseModel):
     message: str
     email: str

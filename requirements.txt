@@ -10,5 +10,5 @@ bcrypt
 email-validator
 Pillow
 jinja2
+google-auth
 
-# Dev/tests + IDE stubs: pip install -r requirements-dev.txt
