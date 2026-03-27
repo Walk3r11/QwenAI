@@ -20,7 +20,7 @@ fi
 
 if [ ! -f "${MMPROJ_PATH}" ] && [ -n "${MMPROJ_URL:-}" ]; then
   echo "Downloading mmproj.gguf from: ${MMPROJ_URL}"
-  if wget --max-redirect=5 -O "${MMPROJ_PATH}.tmp" "${MMPROJ_URL}" 2>&1; then
+  if wget -q --max-redirect=5 -O "${MMPROJ_PATH}.tmp" "${MMPROJ_URL}"; then
     mv "${MMPROJ_PATH}.tmp" "${MMPROJ_PATH}"
     echo "Downloaded mmproj.gguf."
   else
@@ -36,7 +36,9 @@ if [ -f "${MODEL_PATH}" ] && [ -f "${MMPROJ_PATH}" ]; then
     --mmproj "${MMPROJ_PATH}" \
     --host 127.0.0.1 \
     --port 8081 \
-    -b 512 
+    --ctx-size 4096 \
+    --batch-size 512 \
+    --parallel 1 &
 else
   echo "Model files missing — AI will not be available."
   echo "  qwen.gguf: $([ -f "${MODEL_PATH}" ] && echo 'OK' || echo 'MISSING')"

@@ -1,0 +1,7 @@
+# Tests + HTTP client used by live Railway tests
+pytest>=8.0.0
+httpx>=0.27.0
+
+# Pylance / Pyright: stub packages (cuts “could not resolve” noise for common libs)
+types-requests
+types-Pillow
