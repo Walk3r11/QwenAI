@@ -7,7 +7,7 @@ import re
 import threading
 import time
 from datetime import datetime, timedelta, timezone
-from typing import List, cast
+from typing import Any, Iterator, List, cast
 import requests
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
@@ -43,6 +43,71 @@ def _request_llama_stream(payload: dict):
             return resp, None
         return resp, None
     return None, RuntimeError(f'Llama stayed busy (503) after {LLAMA_503_MAX_RETRIES} retries: {last_body[:800]}')
+
+def _await_llama_http_post(payload: dict, hb: float, phase: str) -> Iterator[tuple[str, Any]]:
+    q: queue.Queue = queue.Queue()
+
+    def worker():
+        try:
+            q.put(('ok', _request_llama_stream(payload)))
+        except Exception as e:
+            q.put(('fail', str(e)))
+
+    threading.Thread(target=worker, daemon=True).start()
+    while True:
+        if hb > 0:
+            try:
+                msg = q.get(timeout=hb)
+            except queue.Empty:
+                yield 'pulse', phase
+                continue
+        else:
+            msg = q.get()
+        kind, data = msg
+        if kind == 'fail':
+            yield 'error', data
+            return
+        yield 'ready', data
+        return
+
+def _pump_llama_sse(resp: requests.Response, hb: float) -> Iterator[tuple[str, Any]]:
+    q_ll: queue.Queue = queue.Queue()
+
+    def _llama_worker():
+        try:
+            for token_count, final_text in _collect_streamed_with_progress(resp):
+                if final_text is None:
+                    q_ll.put(('tick', token_count))
+                else:
+                    q_ll.put(('final', final_text))
+        except Exception as e:
+            q_ll.put(('error', str(e)))
+        finally:
+            try:
+                resp.close()
+            except Exception:
+                pass
+            q_ll.put(('stop', None))
+
+    threading.Thread(target=_llama_worker, daemon=True).start()
+    while True:
+        try:
+            msg = q_ll.get(timeout=hb)
+        except queue.Empty:
+            yield 'line', json.dumps({'status': 'generating', 'keepalive': True}) + '\n'
+            continue
+        kind, data = msg
+        if kind == 'stop':
+            yield 'text', None
+            return
+        if kind == 'error':
+            yield 'err', data
+            return
+        if kind == 'tick':
+            yield 'line', json.dumps({'status': 'generating', 'tokens': data}) + '\n'
+        if kind == 'final':
+            yield 'text', data
+            return
 
 def _normalize_identification_codes(raw) -> list[str]:
     if not raw:
@@ -421,7 +486,18 @@ async def create_session(files: List[UploadFile]=File(...), user_id: int=Depends
             yield (json.dumps({'status': 'generating', 'phase': 'image', 'index': idx + 1, 'total': n_img}) + '\n')
         yield (json.dumps({'status': 'generating', 'phase': 'llama'}) + '\n')
         payload = {'model': LLAMA_MODEL, 'stream': True, 'max_tokens': VISION_MAX_TOKENS, 'temperature': 0.2, 'frequency_penalty': 0.8, 'messages': [{'role': 'user', 'content': content_parts}]}
-        resp, err = _request_llama_stream(payload)
+        hb = SCAN_STREAM_HEARTBEAT_SEC
+        resp = None
+        err = None
+        for tag, val in _await_llama_http_post(payload, hb, 'llama_connect'):
+            if tag == 'pulse':
+                yield (json.dumps({'status': 'generating', 'keepalive': True, 'phase': val}) + '\n')
+            elif tag == 'error':
+                yield (json.dumps({'status': 'error', 'detail': val}) + '\n')
+                return
+            elif tag == 'ready':
+                resp, err = cast(tuple[requests.Response | None, BaseException | None], val)
+                break
         if err is not None:
             yield (json.dumps({'status': 'error', 'detail': str(err)}) + '\n')
             return
@@ -432,43 +508,15 @@ async def create_session(files: List[UploadFile]=File(...), user_id: int=Depends
             yield (json.dumps({'status': 'error', 'detail': resp.text}) + '\n')
             return
         raw_text = None
-        hb = SCAN_STREAM_HEARTBEAT_SEC
         if hb > 0:
-            q_ll: queue.Queue = queue.Queue()
-
-            def _llama_worker():
-                try:
-                    for token_count, final_text in _collect_streamed_with_progress(resp):
-                        if final_text is None:
-                            q_ll.put(('tick', token_count))
-                        else:
-                            q_ll.put(('final', final_text))
-                except Exception as e:
-                    q_ll.put(('error', str(e)))
-                finally:
-                    try:
-                        resp.close()
-                    except Exception:
-                        pass
-                    q_ll.put(('stop', None))
-
-            threading.Thread(target=_llama_worker, daemon=True).start()
-            while True:
-                try:
-                    msg = q_ll.get(timeout=hb)
-                except queue.Empty:
-                    yield (json.dumps({'status': 'generating', 'keepalive': True}) + '\n')
-                    continue
-                kind, data = msg
-                if kind == 'stop':
-                    break
-                if kind == 'error':
-                    yield (json.dumps({'status': 'error', 'detail': f'Llama stream read failed: {data}'}) + '\n')
+            for tag, val in _pump_llama_sse(resp, hb):
+                if tag == 'line':
+                    yield val
+                elif tag == 'err':
+                    yield (json.dumps({'status': 'error', 'detail': f'Llama stream read failed: {val}'}) + '\n')
                     return
-                if kind == 'tick':
-                    yield (json.dumps({'status': 'generating', 'tokens': data}) + '\n')
-                if kind == 'final':
-                    raw_text = data
+                elif tag == 'text':
+                    raw_text = val
                     break
         else:
             for token_count, final_text in _collect_streamed_with_progress(resp):
@@ -486,6 +534,7 @@ async def create_session(files: List[UploadFile]=File(...), user_id: int=Depends
             return
         ai_items = _extract_scan_items_for_session(parsed)
         tip = parsed.get('tip')
+        yield (json.dumps({'status': 'generating', 'phase': 'saving'}) + '\n')
         db = SessionLocal()
         try:
             session = ScanSession(user_id=user_id, status='pending', raw_response=raw_text, tip=tip)
@@ -643,7 +692,18 @@ def generate_recipes(session_id: int, user_id: int=Depends(get_current_user_id_f
         yield (json.dumps({'status': 'generating_recipes'}) + '\n')
         prompt = f'{RECIPE_PROMPT}\n\nAvailable items: {items_text}'
         payload = {'model': LLAMA_MODEL, 'stream': True, 'max_tokens': 1024, 'temperature': 0.3, 'frequency_penalty': 0.6, 'messages': [{'role': 'user', 'content': prompt}]}
-        resp, err = _request_llama_stream(payload)
+        hb = SCAN_STREAM_HEARTBEAT_SEC
+        resp = None
+        err = None
+        for tag, val in _await_llama_http_post(payload, hb, 'recipe_llama_connect'):
+            if tag == 'pulse':
+                yield (json.dumps({'status': 'generating', 'keepalive': True, 'phase': val}) + '\n')
+            elif tag == 'error':
+                yield (json.dumps({'status': 'error', 'detail': val}) + '\n')
+                return
+            elif tag == 'ready':
+                resp, err = cast(tuple[requests.Response | None, BaseException | None], val)
+                break
         if err is not None:
             yield (json.dumps({'status': 'error', 'detail': str(err)}) + '\n')
             return
@@ -654,11 +714,22 @@ def generate_recipes(session_id: int, user_id: int=Depends(get_current_user_id_f
             yield (json.dumps({'status': 'error', 'detail': resp.text}) + '\n')
             return
         raw_text = None
-        for token_count, final_text in _collect_streamed_with_progress(resp):
-            if final_text is None:
-                yield (json.dumps({'status': 'generating', 'tokens': token_count}) + '\n')
-            else:
-                raw_text = final_text
+        if hb > 0:
+            for tag, val in _pump_llama_sse(resp, hb):
+                if tag == 'line':
+                    yield val
+                elif tag == 'err':
+                    yield (json.dumps({'status': 'error', 'detail': f'Llama stream read failed: {val}'}) + '\n')
+                    return
+                elif tag == 'text':
+                    raw_text = val
+                    break
+        else:
+            for token_count, final_text in _collect_streamed_with_progress(resp):
+                if final_text is None:
+                    yield (json.dumps({'status': 'generating', 'tokens': token_count}) + '\n')
+                else:
+                    raw_text = final_text
         if not raw_text:
             yield (json.dumps({'status': 'error', 'detail': 'Empty response from model.'}) + '\n')
             return

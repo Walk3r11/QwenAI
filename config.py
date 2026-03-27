@@ -18,7 +18,7 @@ else:
 LLAMA_HTTP_TIMEOUT = (60, _llama_read)
 MODEL_DIR = os.getenv('MODEL_DIR', '/models')
 VISION_MAX_TOKENS = int(os.getenv('VISION_MAX_TOKENS', '2560'))
-SCAN_STREAM_HEARTBEAT_SEC = float(os.getenv('SCAN_STREAM_HEARTBEAT_SEC', '8'))
+SCAN_STREAM_HEARTBEAT_SEC = float(os.getenv('SCAN_STREAM_HEARTBEAT_SEC', '4'))
 FRESHNESS_MIN = max(1, int(os.getenv('FRESHNESS_MIN', '1')))
 FRESHNESS_MAX = int(os.getenv('FRESHNESS_MAX', '5'))
 if FRESHNESS_MAX < FRESHNESS_MIN:
