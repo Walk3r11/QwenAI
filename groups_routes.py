@@ -68,14 +68,34 @@ def leave_group(group_id: int, db: Session=Depends(get_db), current_user: User=D
 @router.get('', response_model=list[GroupOut])
 def list_my_groups(db: Session=Depends(get_db), current_user: User=Depends(get_current_user)):
     q = select(Group).join(GroupMember, GroupMember.group_id == Group.id).where(GroupMember.user_id == current_user.id).order_by(Group.created_at.desc())
-    return list(db.scalars(q).all())
+    groups = list(db.scalars(q).all())
+    for g in groups:
+        if g.created_by_user_id == current_user.id:
+            code_obj = db.scalar(
+                select(GroupJoinCode)
+                .where(GroupJoinCode.group_id == g.id, GroupJoinCode.active == True)
+                .order_by(GroupJoinCode.created_at.desc())
+            )
+            if code_obj:
+                setattr(g, 'code', code_obj.code)
+    return groups
 
 @router.get('/{group_id}', response_model=GroupDetailOut)
 def get_group(group_id: int, db: Session=Depends(get_db), current_user: User=Depends(get_current_user)):
-    _ensure_member(db, group_id, current_user.id)
+    membership = _ensure_member(db, group_id, current_user.id)
     group = db.scalar(select(Group).where(Group.id == group_id).options(selectinload(Group.members).selectinload(GroupMember.user)))
     if not group:
         raise HTTPException(status_code=404, detail='Group not found.')
+    
+    if membership.role == 'owner':
+        code_obj = db.scalar(
+            select(GroupJoinCode)
+            .where(GroupJoinCode.group_id == group_id, GroupJoinCode.active == True)
+            .order_by(GroupJoinCode.created_at.desc())
+        )
+        if code_obj:
+            setattr(group, 'code', code_obj.code)
+            
     return group
 
 @router.post('/join', response_model=GroupOut)
