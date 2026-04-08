@@ -4,7 +4,7 @@ MODEL_DIR="${MODEL_DIR:-/models}"
 MODEL_PATH="${MODEL_DIR}/qwen.gguf"
 MMPROJ_PATH="${MODEL_DIR}/mmproj.gguf"
 PORT="${PORT:-8000}"
-ENABLE_AI_RAW="${ENABLE_AI:-false}"
+ENABLE_AI_RAW="${ENABLE_AI:-false}" # toggle
 ENABLE_AI_NORMALIZED="$(printf '%s' "${ENABLE_AI_RAW}" | tr '[:upper:]' '[:lower:]')"
 
 mkdir -p "${MODEL_DIR}"
