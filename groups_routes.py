@@ -141,3 +141,20 @@ def create_join_code(group_id: int, db: Session=Depends(get_db), current_user: U
         except Exception:
             db.rollback()
     raise HTTPException(status_code=500, detail='Failed to create join code.')
+
+@router.post('/{group_id}/remove-member/{target_user_id}', status_code=status.HTTP_204_NO_CONTENT)
+def remove_member(group_id: int, target_user_id: int, db: Session=Depends(get_db), current_user: User=Depends(get_current_user)):
+    membership = _ensure_member(db, group_id, current_user.id)
+    if membership.role != 'owner':
+        raise HTTPException(status_code=403, detail='Only owners can remove members.')
+        
+    if target_user_id == current_user.id:
+        raise HTTPException(status_code=400, detail='Cannot remove yourself. Use leave or delete group.')
+        
+    target_membership = db.scalar(select(GroupMember).where(GroupMember.group_id == group_id, GroupMember.user_id == target_user_id))
+    if not target_membership:
+        raise HTTPException(status_code=404, detail='Target user is not a member of this group.')
+        
+    db.delete(target_membership)
+    db.commit()
+    return None
