@@ -17,9 +17,8 @@ app.include_router(groups_router)
 app.include_router(pantry_router)
 app.include_router(recipes_router)
 app.include_router(share_router)
-if ENABLE_AI:
-    from ai_routes import router as ai_router
-    app.include_router(ai_router)
+from ai_routes import router as ai_router
+app.include_router(ai_router)
 
 
 def _pg_table_columns(conn, table: str) -> set[str]:

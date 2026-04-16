@@ -9,19 +9,57 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterator, List, cast
 import requests
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from PIL import Image
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, selectinload
-from config import FRESHNESS_DEFAULT, FRESHNESS_MAX, FRESHNESS_MIN, GROQ_RECIPE_USER_PROMPT, GROQ_SYSTEM_PROMPT, LLAMA_HTTP_TIMEOUT, LLAMA_MODEL, LLAMA_URL, LEGACY_MODEL_FILE, MODEL_DIR, MODEL_FILE, MMPROJ_FILE, RECIPE_PROMPT, SCAN_PROMPT, SCAN_STREAM_HEARTBEAT_SEC, VISION_MAX_TOKENS
+from config import AI_KILLSWITCH_TOKEN, ENABLE_AI, FRESHNESS_DEFAULT, FRESHNESS_MAX, FRESHNESS_MIN, GROQ_RECIPE_USER_PROMPT, GROQ_SYSTEM_PROMPT, LLAMA_HTTP_TIMEOUT, LLAMA_MODEL, LLAMA_URL, LEGACY_MODEL_FILE, MODEL_DIR, MODEL_FILE, MMPROJ_FILE, RECIPE_PROMPT, SCAN_PROMPT, SCAN_STREAM_HEARTBEAT_SEC, VISION_MAX_TOKENS
 from identification_data import KNOWN_IDENTIFICATION_CODES
 from db import SessionLocal, get_db
 from groq_client import groq_chat_json, groq_configured
 from models import FreshnessRef, IngredientIdentificationGroup, PantryItem, ScanImage, ScanItem, ScanItemIdentification, ScanSession, SessionRecipe, TrainingImage, User
 from schemas import AddItemRequest, EditItemRequest, GroqRecipesBatchOut, IdentificationGroupOut, RateRequest, ScanImageOut, ScanItemOut, ScanSessionOut, SessionRecipeOut, TrainingImageOut, TrainingStatsOut
 from security import get_current_user, get_current_user_id_for_stream
-router = APIRouter(prefix='/ai', tags=['ai'])
+
+# Real-time runtime toggle ("killswitch") for the /ai API.
+# It blocks all /ai endpoints except these two:
+#   - GET  /ai/runtime/status
+#   - POST /ai/runtime/toggle
+_runtime_ai_enabled: bool = bool(ENABLE_AI)
+
+
+def _ai_runtime_guard(request: Request) -> None:
+    path = request.url.path
+    if path.endswith('/runtime/status') or path.endswith('/runtime/toggle'):
+        return
+    if not _runtime_ai_enabled:
+        raise HTTPException(status_code=503, detail='AI is OFF (runtime toggle).')
+
+
+router = APIRouter(prefix='/ai', tags=['ai'], dependencies=[Depends(_ai_runtime_guard)])
+
+
+class AiRuntimeToggleIn(BaseModel):
+    enabled: bool
+
+
+@router.get('/runtime/status')
+def ai_runtime_status():
+    return {'enabled': _runtime_ai_enabled, 'model_ready': _model_ready() if ENABLE_AI else False}
+
+
+@router.post('/runtime/toggle')
+def ai_runtime_toggle(body: AiRuntimeToggleIn, x_ai_toggle_token: str | None = Header(default=None, alias='X-AI-Toggle-Token')):
+    global _runtime_ai_enabled
+    if not AI_KILLSWITCH_TOKEN:
+        raise HTTPException(status_code=500, detail='AI_KILLSWITCH_TOKEN is not configured.')
+    if x_ai_toggle_token != AI_KILLSWITCH_TOKEN:
+        raise HTTPException(status_code=403, detail='Invalid X-AI-Toggle-Token.')
+    _runtime_ai_enabled = bool(body.enabled)
+    return {'enabled': _runtime_ai_enabled}
+
 THUMB_MAX = 1080
 _SESSION_EAGER = (selectinload(ScanSession.images), selectinload(ScanSession.items).selectinload(ScanItem.identification_links).selectinload(ScanItemIdentification.group), selectinload(ScanSession.recipes))
 LLAMA_503_MAX_RETRIES = int(os.getenv('LLAMA_503_MAX_RETRIES', '36'))

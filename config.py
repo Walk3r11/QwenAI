@@ -9,6 +9,7 @@ JWT_SECRET = os.getenv('JWT_SECRET', '')
 JWT_ALGORITHM = 'HS256'
 JWT_EXPIRE_MINUTES = int(os.getenv('JWT_EXPIRE_MINUTES', '10080'))
 ENABLE_AI = os.getenv('ENABLE_AI', 'false').strip().lower() in {'1', 'true', 'yes', 'on'}
+AI_KILLSWITCH_TOKEN = os.getenv('AI_KILLSWITCH_TOKEN', '').strip()
 QWENAI_TESTING = os.getenv('QWENAI_TESTING', '').strip().lower() in {'1', 'true', 'yes', 'on'}
 AUTH_SIGNUP_IMMEDIATE_TOKEN = QWENAI_TESTING
 PC_SCAN_SHARED_SECRET = os.getenv('PC_SCAN_SHARED_SECRET', '').strip()
