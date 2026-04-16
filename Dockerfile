@@ -1,6 +1,7 @@
 FROM ubuntu:22.04
 
 ARG DEBIAN_FRONTEND=noninteractive
+ARG LLAMA_CPP_RELEASE=b8126
 
 # APT on CI can be flaky (mirror sync / transient network). Add retries + timeouts
 # and retry the whole update+install sequence a few times.
@@ -15,7 +16,7 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*; \
     apt-get update -y && \
     apt-get install -y --no-install-recommends \
-      ca-certificates git build-essential cmake python3 python3-pip wget \
+      ca-certificates python3 python3-pip wget tar \
     && break; \
     echo "apt-get failed (attempt ${i}/5) — retrying..." >&2; \
     sleep 5; \
@@ -26,9 +27,24 @@ WORKDIR /app
 COPY requirements.txt /app/requirements.txt
 RUN pip3 install --no-cache-dir -r /app/requirements.txt
 
-RUN git clone --depth 1 https://github.com/ggerganov/llama.cpp /llama.cpp
-WORKDIR /llama.cpp
-RUN cmake -B build && cmake --build build --config Release -j
+# Use official prebuilt llama.cpp binaries (avoid long compile times on CI).
+# Provides /llama.cpp/build/bin/llama-server expected by start.sh.
+RUN set -eux; \
+  mkdir -p /llama.cpp/build/bin /opt/llama; \
+  wget -q -O /tmp/llama-bin.tar.gz "https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_CPP_RELEASE}/llama-${LLAMA_CPP_RELEASE}-bin-ubuntu-x64.tar.gz"; \
+  tar -xzf /tmp/llama-bin.tar.gz -C /opt/llama; \
+  rm -f /tmp/llama-bin.tar.gz; \
+  if [ -f /opt/llama/llama-server ]; then \
+    cp /opt/llama/llama-server /llama.cpp/build/bin/llama-server; \
+  elif [ -f /opt/llama/bin/llama-server ]; then \
+    cp /opt/llama/bin/llama-server /llama.cpp/build/bin/llama-server; \
+  else \
+    echo "Could not find llama-server in release tarball" >&2; \
+    ls -la /opt/llama >&2 || true; \
+    ls -la /opt/llama/bin >&2 || true; \
+    exit 1; \
+  fi; \
+  chmod +x /llama.cpp/build/bin/llama-server
 
 ENV MODEL_DIR=/models
 RUN mkdir -p "${MODEL_DIR}"
