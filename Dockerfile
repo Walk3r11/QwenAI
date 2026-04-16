@@ -2,9 +2,25 @@ FROM ubuntu:22.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates git build-essential cmake python3 python3-pip wget \
-  && rm -rf /var/lib/apt/lists/*
+# APT on CI can be flaky (mirror sync / transient network). Add retries + timeouts
+# and retry the whole update+install sequence a few times.
+RUN set -eux; \
+  printf '%s\n' \
+    'Acquire::Retries "5";' \
+    'Acquire::http::Timeout "30";' \
+    'Acquire::https::Timeout "30";' \
+    'Acquire::ftp::Timeout "30";' \
+    > /etc/apt/apt.conf.d/80-retries; \
+  for i in 1 2 3 4 5; do \
+    rm -rf /var/lib/apt/lists/*; \
+    apt-get update -y && \
+    apt-get install -y --no-install-recommends \
+      ca-certificates git build-essential cmake python3 python3-pip wget \
+    && break; \
+    echo "apt-get failed (attempt ${i}/5) — retrying..." >&2; \
+    sleep 5; \
+  done; \
+  rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY requirements.txt /app/requirements.txt
