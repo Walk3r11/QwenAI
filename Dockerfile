@@ -38,10 +38,22 @@ RUN set -eux; \
     cp /opt/llama/llama-server /llama.cpp/build/bin/llama-server; \
   elif [ -f /opt/llama/bin/llama-server ]; then \
     cp /opt/llama/bin/llama-server /llama.cpp/build/bin/llama-server; \
+  elif [ -f /opt/llama/*/llama-server ]; then \
+    cp /opt/llama/*/llama-server /llama.cpp/build/bin/llama-server; \
+  elif [ -f /opt/llama/*/bin/llama-server ]; then \
+    cp /opt/llama/*/bin/llama-server /llama.cpp/build/bin/llama-server; \
+  elif [ -f /opt/llama/*/*/llama-server ]; then \
+    cp /opt/llama/*/*/llama-server /llama.cpp/build/bin/llama-server; \
+  elif [ -f /opt/llama/*/*/bin/llama-server ]; then \
+    cp /opt/llama/*/*/bin/llama-server /llama.cpp/build/bin/llama-server; \
   else \
     echo "Could not find llama-server in release tarball" >&2; \
     ls -la /opt/llama >&2 || true; \
     ls -la /opt/llama/bin >&2 || true; \
+    ls -la /opt/llama/* >&2 || true; \
+    ls -la /opt/llama/*/bin >&2 || true; \
+    ls -la /opt/llama/*/* >&2 || true; \
+    ls -la /opt/llama/*/*/bin >&2 || true; \
     exit 1; \
   fi; \
   chmod +x /llama.cpp/build/bin/llama-server
