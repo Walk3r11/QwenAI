@@ -27,7 +27,10 @@ ENV PORT=8000
 EXPOSE 8000
 
 ENV LLAMA_URL=http://127.0.0.1:8081/v1/chat/completions
-ENV LLAMA_MODEL=qwen2.5-vl
+ENV LLAMA_MODEL=llava-onevision-7b
+ENV MODEL_FILE=llava-onevision-7b.gguf
+ENV LEGACY_MODEL_FILE=qwen.gguf
+ENV MMPROJ_FILE=mmproj.gguf
 
 ENV MODEL_URL=""
 ENV MMPROJ_URL=""

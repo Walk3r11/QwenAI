@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 
 MODEL_DIR="${MODEL_DIR:-/models}"
-MODEL_PATH="${MODEL_DIR}/qwen.gguf"
-MMPROJ_PATH="${MODEL_DIR}/mmproj.gguf"
+# Default to LLaVA OneVision (7b). Keep a legacy fallback for older deployments.
+MODEL_FILE="${MODEL_FILE:-llava-onevision-7b.gguf}"
+LEGACY_MODEL_FILE="${LEGACY_MODEL_FILE:-qwen.gguf}"
+MMPROJ_FILE="${MMPROJ_FILE:-mmproj.gguf}"
+
+MODEL_PATH_NEW="${MODEL_DIR}/${MODEL_FILE}"
+MODEL_PATH_LEGACY="${MODEL_DIR}/${LEGACY_MODEL_FILE}"
+MMPROJ_PATH="${MODEL_DIR}/${MMPROJ_FILE}"
 PORT="${PORT:-8000}"
 ENABLE_AI_RAW="${ENABLE_AI:-false}" # toggle
 ENABLE_AI_NORMALIZED="$(printf '%s' "${ENABLE_AI_RAW}" | tr '[:upper:]' '[:lower:]')"
@@ -11,14 +17,14 @@ mkdir -p "${MODEL_DIR}"
 
 if [ "${ENABLE_AI_NORMALIZED}" = "1" ] || [ "${ENABLE_AI_NORMALIZED}" = "true" ] || [ "${ENABLE_AI_NORMALIZED}" = "yes" ] || [ "${ENABLE_AI_NORMALIZED}" = "on" ]; then
   echo "AI is enabled (ENABLE_AI=${ENABLE_AI_RAW})."
-  if [ ! -f "${MODEL_PATH}" ] && [ -n "${MODEL_URL:-}" ]; then
-    echo "Downloading qwen.gguf..."
-    if wget -q -O "${MODEL_PATH}.tmp" "${MODEL_URL}"; then
-      mv "${MODEL_PATH}.tmp" "${MODEL_PATH}"
-      echo "Downloaded qwen.gguf."
+  if [ ! -f "${MODEL_PATH_NEW}" ] && [ -n "${MODEL_URL:-}" ]; then
+    echo "Downloading ${MODEL_FILE}..."
+    if wget -q -O "${MODEL_PATH_NEW}.tmp" "${MODEL_URL}"; then
+      mv "${MODEL_PATH_NEW}.tmp" "${MODEL_PATH_NEW}"
+      echo "Downloaded ${MODEL_FILE}."
     else
-      echo "FAILED to download qwen.gguf"
-      rm -f "${MODEL_PATH}.tmp"
+      echo "FAILED to download ${MODEL_FILE}"
+      rm -f "${MODEL_PATH_NEW}.tmp"
     fi
   fi
 
@@ -33,10 +39,16 @@ if [ "${ENABLE_AI_NORMALIZED}" = "1" ] || [ "${ENABLE_AI_NORMALIZED}" = "true" ]
     fi
   fi
 
-  if [ -f "${MODEL_PATH}" ] && [ -f "${MMPROJ_PATH}" ]; then
+  MODEL_PATH_EFF="${MODEL_PATH_NEW}"
+  if [ ! -f "${MODEL_PATH_EFF}" ] && [ -f "${MODEL_PATH_LEGACY}" ]; then
+    echo "Using legacy model file: ${LEGACY_MODEL_FILE}"
+    MODEL_PATH_EFF="${MODEL_PATH_LEGACY}"
+  fi
+
+  if [ -f "${MODEL_PATH_EFF}" ] && [ -f "${MMPROJ_PATH}" ]; then
     echo "Starting llama-server..."
     /llama.cpp/build/bin/llama-server \
-      -m "${MODEL_PATH}" \
+      -m "${MODEL_PATH_EFF}" \
       --mmproj "${MMPROJ_PATH}" \
       --host 127.0.0.1 \
       --port 8081 \
@@ -45,8 +57,9 @@ if [ "${ENABLE_AI_NORMALIZED}" = "1" ] || [ "${ENABLE_AI_NORMALIZED}" = "true" ]
       --parallel 1 &
   else
     echo "Model files missing — AI will not be available."
-    echo "  qwen.gguf: $([ -f "${MODEL_PATH}" ] && echo 'OK' || echo 'MISSING')"
-    echo "  mmproj.gguf: $([ -f "${MMPROJ_PATH}" ] && echo 'OK' || echo 'MISSING')"
+    echo "  ${MODEL_FILE}: $([ -f "${MODEL_PATH_NEW}" ] && echo 'OK' || echo 'MISSING')"
+    echo "  ${LEGACY_MODEL_FILE}: $([ -f "${MODEL_PATH_LEGACY}" ] && echo 'OK' || echo 'MISSING')"
+    echo "  ${MMPROJ_FILE}: $([ -f "${MMPROJ_PATH}" ] && echo 'OK' || echo 'MISSING')"
   fi
 else
   echo "AI is disabled (ENABLE_AI=${ENABLE_AI_RAW}); skipping model download and llama-server."

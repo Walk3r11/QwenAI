@@ -14,7 +14,7 @@ from fastapi.responses import StreamingResponse
 from PIL import Image
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, selectinload
-from config import FRESHNESS_DEFAULT, FRESHNESS_MAX, FRESHNESS_MIN, GROQ_RECIPE_USER_PROMPT, GROQ_SYSTEM_PROMPT, LLAMA_HTTP_TIMEOUT, LLAMA_MODEL, LLAMA_URL, MODEL_DIR, RECIPE_PROMPT, SCAN_PROMPT, SCAN_STREAM_HEARTBEAT_SEC, VISION_MAX_TOKENS
+from config import FRESHNESS_DEFAULT, FRESHNESS_MAX, FRESHNESS_MIN, GROQ_RECIPE_USER_PROMPT, GROQ_SYSTEM_PROMPT, LLAMA_HTTP_TIMEOUT, LLAMA_MODEL, LLAMA_URL, LEGACY_MODEL_FILE, MODEL_DIR, MODEL_FILE, MMPROJ_FILE, RECIPE_PROMPT, SCAN_PROMPT, SCAN_STREAM_HEARTBEAT_SEC, VISION_MAX_TOKENS
 from identification_data import KNOWN_IDENTIFICATION_CODES
 from db import SessionLocal, get_db
 from groq_client import groq_chat_json, groq_configured
@@ -359,7 +359,10 @@ def _collect_streamed_with_progress(resp: requests.Response):
     yield (token_count, ''.join(chunks))
 
 def _model_ready() -> bool:
-    return os.path.exists(f'{MODEL_DIR}/qwen.gguf') and os.path.exists(f'{MODEL_DIR}/mmproj.gguf')
+    model_present_new = os.path.exists(f'{MODEL_DIR}/{MODEL_FILE}')
+    model_present_legacy = os.path.exists(f'{MODEL_DIR}/{LEGACY_MODEL_FILE}')
+    mmproj_present = os.path.exists(f'{MODEL_DIR}/{MMPROJ_FILE}')
+    return (model_present_new or model_present_legacy) and mmproj_present
 
 def _estimate_expires(name: str) -> datetime | None:
     lowered = name.lower()

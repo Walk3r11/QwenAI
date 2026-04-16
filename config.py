@@ -15,7 +15,7 @@ PC_SCAN_SHARED_SECRET = os.getenv('PC_SCAN_SHARED_SECRET', '').strip()
 _allow_pc_raw = os.getenv('ALLOW_PC_SCRIPT_SIGNUP', 'true').strip().lower()
 ALLOW_PC_SCRIPT_SIGNUP = _allow_pc_raw not in {'0', 'false', 'no', 'off'}
 LLAMA_URL = os.getenv('LLAMA_URL', 'http://127.0.0.1:8081/v1/chat/completions')
-LLAMA_MODEL = os.getenv('LLAMA_MODEL', 'qwen2.5-vl')
+LLAMA_MODEL = os.getenv('LLAMA_MODEL', 'llava-onevision-7b')
 _read_raw = os.getenv('LLAMA_HTTP_READ_TIMEOUT', '86400').strip().lower()
 if _read_raw in ('none', 'unlimited', '0', 'inf'):
     _llama_read = None
@@ -23,6 +23,9 @@ else:
     _llama_read = int(_read_raw)
 LLAMA_HTTP_TIMEOUT = (60, _llama_read)
 MODEL_DIR = os.getenv('MODEL_DIR', '/models')
+MODEL_FILE = os.getenv('MODEL_FILE', 'llava-onevision-7b.gguf')
+LEGACY_MODEL_FILE = os.getenv('LEGACY_MODEL_FILE', 'qwen.gguf')
+MMPROJ_FILE = os.getenv('MMPROJ_FILE', 'mmproj.gguf')
 VISION_MAX_TOKENS = int(os.getenv('VISION_MAX_TOKENS', '2560'))
 SCAN_STREAM_HEARTBEAT_SEC = float(os.getenv('SCAN_STREAM_HEARTBEAT_SEC', '4'))
 FRESHNESS_MIN = max(1, int(os.getenv('FRESHNESS_MIN', '1')))
