@@ -1,7 +1,6 @@
 import json
 import os
 import sys
-import tempfile
 from pathlib import Path
 _root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_root))
@@ -9,10 +8,7 @@ os.environ['QWENAI_TESTING'] = '1'
 os.environ.setdefault('DATABASE_URL', 'sqlite:///:memory:')
 os.environ.setdefault('JWT_SECRET', 'test-secret-key-at-least-32-characters-long')
 os.environ.setdefault('ENABLE_AI', 'true')
-_tmp = tempfile.mkdtemp()
-Path(_tmp, 'qwen.gguf').write_bytes(b'stub')
-Path(_tmp, 'mmproj.gguf').write_bytes(b'stub')
-os.environ.setdefault('MODEL_DIR', _tmp)
+os.environ.setdefault('GROQ_API_KEY', 'test-groq-key')
 
 
 def _noop_send_verification_email(*args, **kwargs):

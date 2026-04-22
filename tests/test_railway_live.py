@@ -52,8 +52,8 @@ def test_railway_health():
     assert data.get('db_connected') is True
     if not data.get('ai_enabled'):
         pytest.fail('AI is disabled on the server. Set ENABLE_AI=true in Railway and redeploy.')
-    if not data.get('model_file_present') or not data.get('mmproj_file_present'):
-        pytest.fail('Model files missing on the server. Check MODEL_URL / MMPROJ_URL and logs.')
+    if not data.get('groq_configured'):
+        pytest.fail('GROQ_API_KEY missing on the server. Set it in Railway and redeploy.')
 
 @pytest.mark.live_railway
 def test_railway_ai_session_stream(bearer_token):

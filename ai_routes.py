@@ -1,13 +1,9 @@
 import base64
 import io
 import json
-import os
-import queue
 import re
-import threading
-import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Iterator, List, cast
+from typing import List, cast
 import requests
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
@@ -15,10 +11,10 @@ from pydantic import BaseModel
 from PIL import Image
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, selectinload
-from config import AI_KILLSWITCH_TOKEN, ENABLE_AI, FRESHNESS_DEFAULT, FRESHNESS_MAX, FRESHNESS_MIN, GROQ_RECIPE_USER_PROMPT, GROQ_SYSTEM_PROMPT, LLAMA_HTTP_TIMEOUT, LLAMA_MODEL, LLAMA_URL, LEGACY_MODEL_FILE, MODEL_DIR, MODEL_FILE, MMPROJ_FILE, RECIPE_PROMPT, SCAN_PROMPT, SCAN_STREAM_HEARTBEAT_SEC, VISION_MAX_TOKENS
+from config import AI_KILLSWITCH_TOKEN, ENABLE_AI, FRESHNESS_DEFAULT, FRESHNESS_MAX, FRESHNESS_MIN, GROQ_RECIPE_USER_PROMPT, GROQ_SYSTEM_PROMPT, SCAN_PROMPT, VISION_MAX_TOKENS
 from identification_data import KNOWN_IDENTIFICATION_CODES
 from db import SessionLocal, get_db
-from groq_client import groq_chat_json, groq_configured
+from groq_client import groq_chat_json, groq_chat_vision_json, groq_configured
 from models import FreshnessRef, IngredientIdentificationGroup, PantryItem, ScanImage, ScanItem, ScanItemIdentification, ScanSession, SessionRecipe, TrainingImage, User
 from schemas import AddItemRequest, EditItemRequest, GroqRecipesBatchOut, IdentificationGroupOut, RateRequest, ScanImageOut, ScanItemOut, ScanSessionOut, SessionRecipeOut, TrainingImageOut, TrainingStatsOut
 from security import get_current_user, get_current_user_id_for_stream
@@ -47,7 +43,7 @@ class AiRuntimeToggleIn(BaseModel):
 
 @router.get('/runtime/status')
 def ai_runtime_status():
-    return {'enabled': _runtime_ai_enabled, 'model_ready': _model_ready() if ENABLE_AI else False}
+    return {'enabled': _runtime_ai_enabled, 'model_ready': groq_configured() if ENABLE_AI else False}
 
 
 @router.post('/runtime/toggle')
@@ -62,90 +58,7 @@ def ai_runtime_toggle(body: AiRuntimeToggleIn, x_ai_toggle_token: str | None = H
 
 THUMB_MAX = 1080
 _SESSION_EAGER = (selectinload(ScanSession.images), selectinload(ScanSession.items).selectinload(ScanItem.identification_links).selectinload(ScanItemIdentification.group), selectinload(ScanSession.recipes))
-LLAMA_503_MAX_RETRIES = int(os.getenv('LLAMA_503_MAX_RETRIES', '36'))
-LLAMA_503_SLEEP_SEC = float(os.getenv('LLAMA_503_SLEEP_SEC', '5'))
 
-def _request_llama_stream(payload: dict):
-    last_body = ''
-    for _ in range(LLAMA_503_MAX_RETRIES):
-        try:
-            resp = requests.post(LLAMA_URL, json=payload, timeout=LLAMA_HTTP_TIMEOUT, stream=True)
-        except requests.RequestException as e:
-            return None, e
-        if resp.status_code == 503:
-            last_body = resp.text or ''
-            resp.close()
-            if any(x in last_body.lower() for x in ('loading', 'load', 'unavailable', 'not ready')):
-                time.sleep(LLAMA_503_SLEEP_SEC)
-                continue
-            return resp, None
-        return resp, None
-    return None, RuntimeError(f'Llama stayed busy (503) after {LLAMA_503_MAX_RETRIES} retries: {last_body[:800]}')
-
-def _await_llama_http_post(payload: dict, hb: float, phase: str) -> Iterator[tuple[str, Any]]:
-    q: queue.Queue = queue.Queue()
-
-    def worker():
-        try:
-            q.put(('ok', _request_llama_stream(payload)))
-        except Exception as e:
-            q.put(('fail', str(e)))
-
-    threading.Thread(target=worker, daemon=True).start()
-    while True:
-        if hb > 0:
-            try:
-                msg = q.get(timeout=hb)
-            except queue.Empty:
-                yield 'pulse', phase
-                continue
-        else:
-            msg = q.get()
-        kind, data = msg
-        if kind == 'fail':
-            yield 'error', data
-            return
-        yield 'ready', data
-        return
-
-def _pump_llama_sse(resp: requests.Response, hb: float) -> Iterator[tuple[str, Any]]:
-    q_ll: queue.Queue = queue.Queue()
-
-    def _llama_worker():
-        try:
-            for token_count, final_text in _collect_streamed_with_progress(resp):
-                if final_text is None:
-                    q_ll.put(('tick', token_count))
-                else:
-                    q_ll.put(('final', final_text))
-        except Exception as e:
-            q_ll.put(('error', str(e)))
-        finally:
-            try:
-                resp.close()
-            except Exception:
-                pass
-            q_ll.put(('stop', None))
-
-    threading.Thread(target=_llama_worker, daemon=True).start()
-    while True:
-        try:
-            msg = q_ll.get(timeout=hb)
-        except queue.Empty:
-            yield 'line', json.dumps({'status': 'generating', 'keepalive': True}) + '\n'
-            continue
-        kind, data = msg
-        if kind == 'stop':
-            yield 'text', None
-            return
-        if kind == 'error':
-            yield 'err', data
-            return
-        if kind == 'tick':
-            yield 'line', json.dumps({'status': 'generating', 'tokens': data}) + '\n'
-        if kind == 'final':
-            yield 'text', data
-            return
 
 def _normalize_identification_codes(raw) -> list[str]:
     if not raw:
@@ -354,53 +267,8 @@ def _normalize_recipe_dict(r: dict) -> dict | None:
             minutes = None
     return {'name': name, 'uses': _str_list(r.get('uses')), 'extra': _str_list(r.get('extra')), 'steps': _str_list(r.get('steps')), 'minutes': minutes}
 
-def _collect_streamed(resp: requests.Response) -> tuple[str, int]:
-    chunks: list[str] = []
-    token_count = 0
-    for line in resp.iter_lines(decode_unicode=True):
-        if not line or not line.startswith('data: '):
-            continue
-        payload = line[6:]
-        if payload.strip() == '[DONE]':
-            break
-        try:
-            obj = json.loads(payload)
-            delta = obj['choices'][0].get('delta', {})
-            content = delta.get('content')
-            if content:
-                chunks.append(content)
-                token_count += 1
-        except (json.JSONDecodeError, KeyError, IndexError):
-            continue
-    return (''.join(chunks), token_count)
-
-def _collect_streamed_with_progress(resp: requests.Response):
-    chunks: list[str] = []
-    token_count = 0
-    for line in resp.iter_lines(decode_unicode=True):
-        if not line or not line.startswith('data: '):
-            continue
-        payload = line[6:]
-        if payload.strip() == '[DONE]':
-            break
-        try:
-            obj = json.loads(payload)
-            delta = obj['choices'][0].get('delta', {})
-            content = delta.get('content')
-            if content:
-                chunks.append(content)
-                token_count += 1
-                if token_count % 8 == 0:
-                    yield (token_count, None)
-        except (json.JSONDecodeError, KeyError, IndexError):
-            continue
-    yield (token_count, ''.join(chunks))
-
 def _model_ready() -> bool:
-    model_present_new = os.path.exists(f'{MODEL_DIR}/{MODEL_FILE}')
-    model_present_legacy = os.path.exists(f'{MODEL_DIR}/{LEGACY_MODEL_FILE}')
-    mmproj_present = os.path.exists(f'{MODEL_DIR}/{MMPROJ_FILE}')
-    return (model_present_new or model_present_legacy) and mmproj_present
+    return groq_configured()
 
 def _estimate_expires(name: str) -> datetime | None:
     lowered = name.lower()
@@ -489,7 +357,7 @@ MAX_SCAN_UPLOADS = 50
 @router.post('/sessions')
 async def create_session(files: List[UploadFile]=File(...), user_id: int=Depends(get_current_user_id_for_stream)):
     if not _model_ready():
-        raise HTTPException(status_code=503, detail='Model files not ready.')
+        raise HTTPException(status_code=503, detail='Vision model not configured. Set GROQ_API_KEY.')
     if len(files) < 1 or len(files) > MAX_SCAN_UPLOADS:
         raise HTTPException(status_code=400, detail=f'Upload 1 to {MAX_SCAN_UPLOADS} images per session.')
     image_data: list[tuple[bytes, str]] = []
@@ -504,7 +372,7 @@ async def create_session(files: List[UploadFile]=File(...), user_id: int=Depends
     def _stream():
         yield (json.dumps({'status': 'processing', 'images': len(image_data)}) + '\n')
         thumbnails: list[tuple[str, str]] = []
-        content_parts: list[dict] = []
+        vision_images: list[tuple[str, str]] = []
         ref_db = SessionLocal()
         try:
             freshness_ctx = _build_freshness_context(ref_db, user_id)
@@ -513,7 +381,6 @@ async def create_session(files: List[UploadFile]=File(...), user_id: int=Depends
         prompt_text = SCAN_PROMPT
         if freshness_ctx:
             prompt_text += freshness_ctx
-        content_parts.append({'type': 'text', 'text': prompt_text})
         n_img = len(image_data)
         for idx, (raw_bytes, mime) in enumerate(image_data):
             try:
@@ -522,49 +389,23 @@ async def create_session(files: List[UploadFile]=File(...), user_id: int=Depends
             except Exception:
                 thumbnails.append(('', mime))
             b64 = base64.b64encode(raw_bytes).decode('ascii')
-            data_url = f'data:{mime};base64,{b64}'
-            content_parts.append({'type': 'image_url', 'image_url': {'url': data_url}})
+            vision_images.append((b64, mime))
             yield (json.dumps({'status': 'generating', 'phase': 'image', 'index': idx + 1, 'total': n_img}) + '\n')
-        yield (json.dumps({'status': 'generating', 'phase': 'llama'}) + '\n')
-        payload = {'model': LLAMA_MODEL, 'stream': True, 'max_tokens': VISION_MAX_TOKENS, 'temperature': 0.2, 'frequency_penalty': 0.8, 'messages': [{'role': 'user', 'content': content_parts}]}
-        hb = SCAN_STREAM_HEARTBEAT_SEC
-        resp = None
-        err = None
-        for tag, val in _await_llama_http_post(payload, hb, 'llama_connect'):
-            if tag == 'pulse':
-                yield (json.dumps({'status': 'generating', 'keepalive': True, 'phase': val}) + '\n')
-            elif tag == 'error':
-                yield (json.dumps({'status': 'error', 'detail': val}) + '\n')
-                return
-            elif tag == 'ready':
-                resp, err = cast(tuple[requests.Response | None, BaseException | None], val)
-                break
-        if err is not None:
-            yield (json.dumps({'status': 'error', 'detail': str(err)}) + '\n')
+        yield (json.dumps({'status': 'generating', 'phase': 'groq_vision'}) + '\n')
+        try:
+            raw_text = groq_chat_vision_json(
+                system=prompt_text,
+                user_text='Scan these images and return the JSON described in the system prompt.',
+                images=vision_images,
+                max_tokens=VISION_MAX_TOKENS,
+                temperature=0.2,
+            )
+        except RuntimeError as e:
+            yield (json.dumps({'status': 'error', 'detail': str(e)}) + '\n')
             return
-        if resp is None:
-            yield (json.dumps({'status': 'error', 'detail': 'No response from vision server.'}) + '\n')
+        except requests.RequestException as e:
+            yield (json.dumps({'status': 'error', 'detail': f'Groq request failed: {e}'}) + '\n')
             return
-        if resp.status_code >= 400:
-            yield (json.dumps({'status': 'error', 'detail': resp.text}) + '\n')
-            return
-        raw_text = None
-        if hb > 0:
-            for tag, val in _pump_llama_sse(resp, hb):
-                if tag == 'line':
-                    yield val
-                elif tag == 'err':
-                    yield (json.dumps({'status': 'error', 'detail': f'Llama stream read failed: {val}'}) + '\n')
-                    return
-                elif tag == 'text':
-                    raw_text = val
-                    break
-        else:
-            for token_count, final_text in _collect_streamed_with_progress(resp):
-                if final_text is None:
-                    yield (json.dumps({'status': 'generating', 'tokens': token_count}) + '\n')
-                else:
-                    raw_text = final_text
         if not raw_text:
             yield (json.dumps({'status': 'error', 'detail': 'Empty response from model.'}) + '\n')
             return
@@ -710,98 +551,6 @@ def confirm_session(session_id: int, user: User=Depends(get_current_user), db: S
     if not row:
         raise HTTPException(status_code=404, detail='Session not found.')
     return _session_to_out(row)
-
-@router.post('/sessions/{session_id}/recipes')
-def generate_recipes(session_id: int, user_id: int=Depends(get_current_user_id_for_stream)):
-    if not _model_ready():
-        raise HTTPException(status_code=503, detail='Model files not ready.')
-    db = SessionLocal()
-    try:
-        session = db.scalar(select(ScanSession).where(ScanSession.id == session_id, ScanSession.user_id == user_id).options(selectinload(ScanSession.items)))
-        if not session:
-            raise HTTPException(status_code=404, detail='Session not found.')
-        if session.status != 'confirmed':
-            raise HTTPException(status_code=409, detail='Confirm the session first.')
-        if not session.items:
-            raise HTTPException(status_code=400, detail='No items in session.')
-        items_text = ', '.join((f'{i.name} ({i.freshness}, qty: {i.qty})' for i in session.items))
-        sess_id = session.id
-    finally:
-        db.close()
-
-    def _stream():
-        yield (json.dumps({'status': 'generating_recipes'}) + '\n')
-        prompt = f'{RECIPE_PROMPT}\n\nAvailable items: {items_text}'
-        payload = {'model': LLAMA_MODEL, 'stream': True, 'max_tokens': 1024, 'temperature': 0.3, 'frequency_penalty': 0.6, 'messages': [{'role': 'user', 'content': prompt}]}
-        hb = SCAN_STREAM_HEARTBEAT_SEC
-        resp = None
-        err = None
-        for tag, val in _await_llama_http_post(payload, hb, 'recipe_llama_connect'):
-            if tag == 'pulse':
-                yield (json.dumps({'status': 'generating', 'keepalive': True, 'phase': val}) + '\n')
-            elif tag == 'error':
-                yield (json.dumps({'status': 'error', 'detail': val}) + '\n')
-                return
-            elif tag == 'ready':
-                resp, err = cast(tuple[requests.Response | None, BaseException | None], val)
-                break
-        if err is not None:
-            yield (json.dumps({'status': 'error', 'detail': str(err)}) + '\n')
-            return
-        if resp is None:
-            yield (json.dumps({'status': 'error', 'detail': 'No response from model server.'}) + '\n')
-            return
-        if resp.status_code >= 400:
-            yield (json.dumps({'status': 'error', 'detail': resp.text}) + '\n')
-            return
-        raw_text = None
-        if hb > 0:
-            for tag, val in _pump_llama_sse(resp, hb):
-                if tag == 'line':
-                    yield val
-                elif tag == 'err':
-                    yield (json.dumps({'status': 'error', 'detail': f'Llama stream read failed: {val}'}) + '\n')
-                    return
-                elif tag == 'text':
-                    raw_text = val
-                    break
-        else:
-            for token_count, final_text in _collect_streamed_with_progress(resp):
-                if final_text is None:
-                    yield (json.dumps({'status': 'generating', 'tokens': token_count}) + '\n')
-                else:
-                    raw_text = final_text
-        if not raw_text:
-            yield (json.dumps({'status': 'error', 'detail': 'Empty response from model.'}) + '\n')
-            return
-        try:
-            parsed = _parse_ai_json(raw_text)
-        except (json.JSONDecodeError, ValueError):
-            yield (json.dumps({'status': 'error', 'detail': 'Invalid JSON', 'raw': raw_text}) + '\n')
-            return
-        raw_entries = _recipe_entries_from_parsed(parsed)
-        recipe_list = [x for x in (_normalize_recipe_dict(r) for r in raw_entries) if x]
-        if not recipe_list:
-            yield (json.dumps({'status': 'error', 'detail': 'No recipes generated.'}) + '\n')
-            return
-        rdb = SessionLocal()
-        try:
-            db_recipes = []
-            for r_data in recipe_list:
-                recipe = SessionRecipe(session_id=sess_id, user_id=user_id, name=r_data['name'], uses_json=json.dumps(r_data['uses']), extra_json=json.dumps(r_data['extra']), steps_json=json.dumps(r_data['steps']), minutes=r_data['minutes'])
-                rdb.add(recipe)
-                db_recipes.append(recipe)
-            rdb.commit()
-            for rec in db_recipes:
-                rdb.refresh(rec)
-            result = {'status': 'done', 'recipes': [SessionRecipeOut(id=rec.id, session_id=rec.session_id, name=rec.name, uses=json.loads(rec.uses_json), extra=json.loads(rec.extra_json), steps=json.loads(rec.steps_json), minutes=rec.minutes, rating=rec.rating, created_at=cast(datetime, rec.created_at)).model_dump(mode='json') for rec in db_recipes]}
-            yield (json.dumps(result) + '\n')
-        except Exception as e:
-            rdb.rollback()
-            yield (json.dumps({'status': 'error', 'detail': f'DB error: {e}'}) + '\n')
-        finally:
-            rdb.close()
-    return StreamingResponse(_stream(), media_type='application/x-ndjson')
 
 @router.post('/sessions/{session_id}/groq-recipes', response_model=GroqRecipesBatchOut)
 def generate_groq_recipes(session_id: int, user: User=Depends(get_current_user), db: Session=Depends(get_db)):

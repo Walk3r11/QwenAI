@@ -7,8 +7,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from config import ENABLE_AI, LLAMA_MODEL, LLAMA_URL
+from config import ENABLE_AI
 from db import get_db
+from groq_client import groq_chat_json, groq_configured
 from models import GroupMember, PantryItem, Recipe, RecipeFavorite, User
 from schemas import RecipeOut, RecipeSuggestRequest
 from security import get_current_user
@@ -39,20 +40,18 @@ def _extract_json_text(raw: str) -> str:
 
 
 def _call_recipe_model(items: list[str]) -> tuple[str, str | None, list[str], list[str]]:
-    prompt = (
+    system = (
+        'You are a kitchen assistant. Use only ingredients the user lists; never invent additions. '
+        'Return strict JSON only.'
+    )
+    user_msg = (
         'These ingredients are everything the group has on hand (no shopping). '
         'One new leftover-friendly meal using ONLY this list; combine creatively. '
         'Return strict JSON only: {"title":string,"description":string|null,"ingredients":[string],"steps":[string]}. '
-        'Ingredients must be from the given list only. Title under 90 chars, ingredients max 20, steps max 10.'
+        'Ingredients must be from the given list only. Title under 90 chars, ingredients max 20, steps max 10.\n'
+        f'Ingredients: {", ".join(items)}'
     )
-    payload = {'model': LLAMA_MODEL, 'stream': False, 'messages': [{'role': 'user', 'content': f'{prompt}\nIngredients: {", ".join(items)}'}], 'temperature': 0.2, 'response_format': {'type': 'json_object'}}
-    r = requests.post(LLAMA_URL, json=payload, timeout=120)
-    if r.status_code >= 400:
-        raise HTTPException(status_code=502, detail={'model_status': r.status_code, 'body': r.text})
-    model_json = r.json()
-    content = model_json['choices'][0]['message']['content']
-    if not isinstance(content, str):
-        content = json.dumps(content)
+    content = groq_chat_json(system, user_msg, temperature=0.2, max_tokens=1024)
     parsed = json.loads(_extract_json_text(content))
     title = str(parsed.get('title', '')).strip() or 'Group Meal Suggestion'
     description = parsed.get('description')
@@ -102,13 +101,15 @@ def suggest_group_recipe(group_id: int, db: Session=Depends(get_db), current_use
     items = [f'{name} x{qty}' if qty > 1 else name for name, qty in sorted(grouped.items(), key=lambda kv: (-kv[1], kv[0]))][:40]
     if not items:
         raise HTTPException(status_code=400, detail='No valid pantry items found for this group.')
-    if ENABLE_AI:
+    if ENABLE_AI and groq_configured():
         try:
             title, description, ingredients, steps = _call_recipe_model(items)
+        except RuntimeError as e:
+            raise HTTPException(status_code=502, detail=f'Groq error: {e}') from e
         except requests.RequestException as e:
-            raise HTTPException(status_code=502, detail=f'Failed to reach model server: {e}') from e
+            raise HTTPException(status_code=502, detail=f'Failed to reach Groq: {e}') from e
         except (KeyError, ValueError, json.JSONDecodeError) as e:
-            raise HTTPException(status_code=502, detail=f'Failed to parse model recipe output: {e}') from e
+            raise HTTPException(status_code=502, detail=f'Failed to parse Groq recipe output: {e}') from e
     else:
         title = f"Group Meal: {', '.join([i.split(' x')[0] for i in items[:3]])}"
         description = 'AI is disabled; this is a generated placeholder from combined group pantry.'
