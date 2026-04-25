@@ -19,6 +19,7 @@ class User(Base):
     pantry_items: Mapped[list[PantryItem]] = relationship(back_populates='user', cascade='all, delete-orphan')
     favorites: Mapped[list[RecipeFavorite]] = relationship(back_populates='user', cascade='all, delete-orphan')
     share_posts: Mapped[list[SharePost]] = relationship(back_populates='user', cascade='all, delete-orphan')
+    shared_recipes: Mapped[list[SharedRecipe]] = relationship(back_populates='user', cascade='all, delete-orphan')
 
 class ScanSession(Base):
     __tablename__ = 'scan_sessions'
@@ -84,6 +85,7 @@ class SessionRecipe(Base):
     steps_json: Mapped[str] = mapped_column(Text, nullable=False)
     minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     rating: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    favorited: Mapped[bool] = mapped_column(default=False, nullable=False)
     created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     session: Mapped[ScanSession] = relationship(back_populates='recipes')
 
@@ -97,18 +99,6 @@ class FreshnessRef(Base):
     last_freshness: Mapped[int] = mapped_column(Integer, default=FRESHNESS_DEFAULT, nullable=False)
     updated_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-class TrainingImage(Base):
-    __tablename__ = 'training_images'
-    id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey('users.id', ondelete='CASCADE'), index=True, nullable=False)
-    session_id: Mapped[int] = mapped_column(ForeignKey('scan_sessions.id', ondelete='CASCADE'), index=True, nullable=False)
-    product_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
-    freshness: Mapped[int] = mapped_column(Integer, nullable=False)
-    image_data: Mapped[str] = mapped_column(Text, nullable=False)
-    mime: Mapped[str] = mapped_column(String(50), nullable=False)
-    verified: Mapped[bool] = mapped_column(default=True, nullable=False)
-    created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
 class Group(Base):
     __tablename__ = 'groups'
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -118,6 +108,7 @@ class Group(Base):
     members: Mapped[list[GroupMember]] = relationship(back_populates='group', cascade='all, delete-orphan')
     join_codes: Mapped[list[GroupJoinCode]] = relationship(back_populates='group', cascade='all, delete-orphan')
     share_posts: Mapped[list[SharePost]] = relationship(back_populates='group', cascade='all, delete-orphan')
+    shared_recipes: Mapped[list[SharedRecipe]] = relationship(back_populates='group', cascade='all, delete-orphan')
 
 class GroupMember(Base):
     __tablename__ = 'group_members'
@@ -199,3 +190,19 @@ class SharePostItem(Base):
     quantity: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     unit: Mapped[str | None] = mapped_column(String(32), nullable=True)
     share_post: Mapped[SharePost] = relationship(back_populates='items')
+
+
+class SharedRecipe(Base):
+    __tablename__ = 'shared_recipes'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey('groups.id', ondelete='CASCADE'), index=True, nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey('users.id', ondelete='CASCADE'), index=True, nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ingredients_json: Mapped[str] = mapped_column(Text, default='[]', nullable=False)
+    steps_json: Mapped[str] = mapped_column(Text, default='[]', nullable=False)
+    minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    group: Mapped[Group] = relationship(back_populates='shared_recipes')
+    user: Mapped[User] = relationship(back_populates='shared_recipes')

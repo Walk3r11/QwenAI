@@ -76,6 +76,7 @@ class SessionRecipeOut(BaseModel):
     steps: list[str]
     minutes: int | None = None
     rating: int | None = None
+    favorited: bool = False
     created_at: datetime
 
     class Config:
@@ -113,22 +114,6 @@ class EditItemRequest(BaseModel):
 
 class RateRequest(BaseModel):
     rating: int = Field(ge=1, le=5)
-
-class TrainingImageOut(BaseModel):
-    id: int
-    product_name: str
-    freshness: int
-    mime: str
-    verified: bool
-    created_at: datetime
-
-    class Config:
-        from_attributes = True
-
-class TrainingStatsOut(BaseModel):
-    total_images: int
-    unique_products: int
-    products: list[dict]
 
 class UpdateProfileRequest(BaseModel):
     name: str = Field(min_length=2, max_length=120)
@@ -220,6 +205,52 @@ class SharePostOut(BaseModel):
     note: str | None
     created_at: datetime
     items: list[PantryItemOut] = []
+
+
+class ShareRecipeRequest(BaseModel):
+    group_id: int
+    title: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
+    ingredients: list[str] = Field(default_factory=list, max_length=50)
+    steps: list[str] = Field(default_factory=list, max_length=50)
+    minutes: int | None = Field(default=None, ge=0, le=10000)
+    note: str | None = Field(default=None, max_length=500)
+    recipe_id: int | None = None
+    session_recipe_id: int | None = None
+
+
+class SharedRecipeOut(BaseModel):
+    id: int
+    group_id: int
+    user_id: int
+    title: str
+    description: str | None = None
+    ingredients: list[str] = []
+    steps: list[str] = []
+    minutes: int | None = None
+    note: str | None = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class RecommendedRecipesOut(BaseModel):
+    based_on: list[str] = []
+    recipes: list[RecipeOut] = []
+
+
+class CombinedGroupItem(BaseModel):
+    name: str
+    quantity: int
+    unit: str | None = None
+    group_ids: list[int] = []
+
+
+class CombinedGroupSuggestionOut(BaseModel):
+    group_ids: list[int]
+    items: list[CombinedGroupItem] = []
+    recipes: list[RecipeOut] = []
 
 
 class LegacyImageScanItemOut(BaseModel):

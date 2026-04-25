@@ -54,7 +54,7 @@ def test_create_session_ndjson_done(mock_vision, client, auth_headers):
 
 
 @patch('ai_routes.groq_chat_vision_json')
-def test_session_confirm_pantry_and_training(mock_vision, client, auth_headers):
+def test_session_confirm_pantry(mock_vision, client, auth_headers):
     payload = {'items': [{'name': 'milk', 'freshness': 4, 'qty': '1', 'unit': 'L', 'confidence': 0.9, 'groups': ['dairy', 'protein']}], 'tip': ''}
     mock_vision.return_value = json.dumps(payload)
     files = [('files', ('a.png', _tiny_png(), 'image/png'))]
@@ -72,9 +72,6 @@ def test_session_confirm_pantry_and_training(mock_vision, client, auth_headers):
     pantry = client.get('/pantry', headers=auth_headers).json()
     assert len(pantry) >= 1
     assert any((p['name'] == 'milk' for p in pantry))
-    stats = client.get('/ai/training/stats', headers=auth_headers).json()
-    assert stats['total_images'] >= 1
-    assert stats['unique_products'] >= 1
 
 
 @patch('ai_routes.groq_chat_vision_json')
@@ -152,3 +149,108 @@ def test_full_pipeline_mock_vision_then_groq_recipes(mock_vision, mock_groq_chat
     assert body['recipes'][0]['name'] == 'Spinach omelette'
     sess = client.get(f'/ai/sessions/{sid}', headers=auth_headers).json()
     assert len(sess['recipes']) == 2
+
+
+@patch('ai_routes.groq_chat_json')
+@patch('ai_routes.groq_chat_vision_json')
+def test_session_recipe_favorites(mock_vision, mock_groq_chat, client, auth_headers):
+    mock_vision.return_value = json.dumps({'items': [{'name': 'rice', 'freshness': 5, 'qty': '1', 'unit': 'cup', 'confidence': 0.9, 'groups': ['pantry']}], 'tip': ''})
+    mock_groq_chat.return_value = json.dumps({'recipes': [{'name': 'Rice bowl', 'uses': ['rice'], 'extra': [], 'steps': ['Cook rice'], 'minutes': 15}]})
+    files = [('files', ('a.png', _tiny_png(), 'image/png'))]
+    with client.stream('POST', '/ai/sessions', files=files, headers=auth_headers) as resp:
+        session = _read_ndjson_last(resp)
+    sid = session['id']
+    assert client.post(f'/ai/sessions/{sid}/confirm', headers=auth_headers).status_code == 200
+    rec_resp = client.post(f'/ai/sessions/{sid}/groq-recipes', headers=auth_headers).json()
+    rid = rec_resp['recipes'][0]['id']
+    assert rec_resp['recipes'][0]['favorited'] is False
+    fav = client.post(f'/ai/recipes/{rid}/favorite', headers=auth_headers)
+    assert fav.status_code == 200
+    assert fav.json()['favorited'] is True
+    favs = client.get('/ai/recipes/favorites', headers=auth_headers).json()
+    assert any(r['id'] == rid for r in favs)
+    unf = client.delete(f'/ai/recipes/{rid}/favorite', headers=auth_headers)
+    assert unf.status_code == 200
+    assert unf.json()['favorited'] is False
+
+
+def _join_two_users_in_group(client, auth_headers):
+    grp = client.post('/groups', headers=auth_headers, json={'name': 'Flatmates'})
+    assert grp.status_code == 201, grp.text
+    return grp.json()
+
+
+@patch('ai_routes.groq_chat_vision_json')
+def test_share_recipe_to_group(mock_vision, client, auth_headers):
+    mock_vision.return_value = json.dumps({'items': [{'name': 'pasta', 'freshness': 5, 'qty': '500', 'unit': 'g', 'confidence': 0.9, 'groups': ['pantry']}], 'tip': ''})
+    grp = _join_two_users_in_group(client, auth_headers)
+    gid = grp['id']
+    payload = {
+        'group_id': gid,
+        'title': 'Quick pasta',
+        'description': 'Weeknight pasta',
+        'ingredients': ['pasta', 'olive oil', 'garlic'],
+        'steps': ['Boil pasta', 'Saute garlic in oil', 'Toss together'],
+        'minutes': 15,
+        'note': 'Cheap and fast',
+    }
+    r = client.post('/share/recipe', headers=auth_headers, json=payload)
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body['title'] == 'Quick pasta'
+    assert body['ingredients'] == ['pasta', 'olive oil', 'garlic']
+    listing = client.get(f'/share/group/{gid}/recipes', headers=auth_headers).json()
+    assert any(p['id'] == body['id'] for p in listing)
+    rid = body['id']
+    assert client.delete(f'/share/recipe/{rid}', headers=auth_headers).status_code == 204
+
+
+@patch('ai_routes.groq_chat_vision_json')
+def test_recommended_recipes_no_ai_fallback(mock_vision, client, auth_headers):
+    mock_vision.return_value = json.dumps({'items': [{'name': 'rice', 'freshness': 5, 'qty': '1', 'unit': 'cup', 'confidence': 0.9, 'groups': ['pantry']}], 'tip': ''})
+    files = [('files', ('a.png', _tiny_png(), 'image/png'))]
+    with client.stream('POST', '/ai/sessions', files=files, headers=auth_headers) as resp:
+        session = _read_ndjson_last(resp)
+    sid = session['id']
+    assert client.post(f'/ai/sessions/{sid}/confirm', headers=auth_headers).status_code == 200
+    with patch('recipes_routes.groq_configured', return_value=False):
+        r = client.get('/recipes/recommended?count=2', headers=auth_headers)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert 'rice' in [b.lower() for b in body['based_on']]
+    assert len(body['recipes']) >= 1
+
+
+@patch('ai_routes.groq_chat_vision_json')
+def test_combined_group_pantry(mock_vision, client, auth_headers):
+    mock_vision.return_value = json.dumps({'items': [{'name': 'tomato', 'freshness': 5, 'qty': '3', 'unit': None, 'confidence': 0.9, 'groups': ['produce']}], 'tip': ''})
+    files = [('files', ('a.png', _tiny_png(), 'image/png'))]
+    with client.stream('POST', '/ai/sessions', files=files, headers=auth_headers) as resp:
+        session = _read_ndjson_last(resp)
+    sid = session['id']
+    assert client.post(f'/ai/sessions/{sid}/confirm', headers=auth_headers).status_code == 200
+    grp = _join_two_users_in_group(client, auth_headers)
+    r = client.get('/ai/groups/combined-pantry', headers=auth_headers)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert grp['id'] in body['group_ids']
+    names = [i['name'] for i in body['items']]
+    assert 'tomato' in names
+
+
+@patch('ai_routes.groq_chat_json')
+@patch('ai_routes.groq_chat_vision_json')
+def test_combined_group_meal_suggestions(mock_vision, mock_groq_chat, client, auth_headers):
+    mock_vision.return_value = json.dumps({'items': [{'name': 'tomato', 'freshness': 5, 'qty': '3', 'unit': None, 'confidence': 0.9, 'groups': ['produce']}, {'name': 'pasta', 'freshness': 5, 'qty': '500', 'unit': 'g', 'confidence': 0.9, 'groups': ['pantry']}], 'tip': ''})
+    mock_groq_chat.return_value = json.dumps({'recipes': [{'title': 'Tomato pasta', 'description': 'Simple meal', 'ingredients': ['tomato', 'pasta'], 'steps': ['Boil pasta', 'Add tomato sauce'], 'minutes': 20}]})
+    files = [('files', ('a.png', _tiny_png(), 'image/png'))]
+    with client.stream('POST', '/ai/sessions', files=files, headers=auth_headers) as resp:
+        session = _read_ndjson_last(resp)
+    sid = session['id']
+    assert client.post(f'/ai/sessions/{sid}/confirm', headers=auth_headers).status_code == 200
+    _join_two_users_in_group(client, auth_headers)
+    r = client.post('/ai/groups/combined-meal?count=1', headers=auth_headers)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body['recipes']) >= 1
+    assert body['recipes'][0]['title'] == 'Tomato pasta'

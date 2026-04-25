@@ -25,9 +25,6 @@ def test_ten_images_full_stack_mocked(mock_vision, mock_groq_chat, client, auth_
     assert r.status_code == 200
     pantry = client.get('/pantry', headers=auth_headers).json()
     assert any((p['name'] == 'salmon' for p in pantry))
-    stats = client.get('/ai/training/stats', headers=auth_headers).json()
-    assert stats['total_images'] >= 10
-    assert stats['unique_products'] >= 1
     r = client.post(f'/ai/sessions/{sid}/groq-recipes', headers=auth_headers)
     assert r.status_code == 200, r.text
     body = r.json()

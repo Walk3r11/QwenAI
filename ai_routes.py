@@ -9,14 +9,14 @@ from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Requ
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from PIL import Image
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, selectinload
 from config import AI_KILLSWITCH_TOKEN, ENABLE_AI, FRESHNESS_DEFAULT, FRESHNESS_MAX, FRESHNESS_MIN, GROQ_RECIPE_USER_PROMPT, GROQ_SYSTEM_PROMPT, SCAN_PROMPT, VISION_MAX_TOKENS
 from identification_data import KNOWN_IDENTIFICATION_CODES
 from db import SessionLocal, get_db
 from groq_client import groq_chat_json, groq_chat_vision_json, groq_configured
-from models import FreshnessRef, IngredientIdentificationGroup, PantryItem, ScanImage, ScanItem, ScanItemIdentification, ScanSession, SessionRecipe, TrainingImage, User
-from schemas import AddItemRequest, EditItemRequest, GroqRecipesBatchOut, IdentificationGroupOut, RateRequest, ScanImageOut, ScanItemOut, ScanSessionOut, SessionRecipeOut, TrainingImageOut, TrainingStatsOut
+from models import FreshnessRef, Group, GroupMember, IngredientIdentificationGroup, PantryItem, Recipe, ScanImage, ScanItem, ScanItemIdentification, ScanSession, SessionRecipe, User
+from schemas import AddItemRequest, CombinedGroupItem, CombinedGroupSuggestionOut, EditItemRequest, GroqRecipesBatchOut, IdentificationGroupOut, RateRequest, RecipeOut, ScanImageOut, ScanItemOut, ScanSessionOut, SessionRecipeOut
 from security import get_current_user, get_current_user_id_for_stream
 
 # Real-time runtime toggle ("killswitch") for the /ai API.
@@ -98,24 +98,6 @@ def _pantry_quantity_from_qty(qty: str | None) -> int:
         return max(1, int(float(raw)))
     except (TypeError, ValueError):
         return 1
-
-def _training_thumbnail_b64(scan_thumb_b64: str, max_side: int = 384) -> str:
-    if not scan_thumb_b64:
-        return scan_thumb_b64
-    try:
-        raw = base64.b64decode(scan_thumb_b64, validate=True)
-    except Exception:
-        return scan_thumb_b64
-    try:
-        img = Image.open(io.BytesIO(raw))
-        if img.mode not in ('RGB', 'RGBA'):
-            img = img.convert('RGB')
-        img.thumbnail((max_side, max_side))
-        buf = io.BytesIO()
-        img.save(buf, format='JPEG', quality=82)
-        return base64.b64encode(buf.getvalue()).decode('ascii')
-    except Exception:
-        return scan_thumb_b64
 
 def _json_list_is_recipe_shape(val: list) -> bool:
     if not val or not isinstance(val[0], dict):
@@ -308,17 +290,12 @@ def _freshness_label(score: float) -> str:
 
 def _build_freshness_context(db: Session, user_id: int) -> str:
     refs = db.scalars(select(FreshnessRef).order_by(FreshnessRef.observations.desc()).limit(30)).all()
-    training_counts = {}
-    rows = db.execute(select(TrainingImage.product_name, func.count(TrainingImage.id)).where(TrainingImage.user_id == user_id).group_by(TrainingImage.product_name)).all()
-    for name, count in rows:
-        training_counts[name] = count
-    if not refs and (not training_counts):
+    if not refs:
         return ''
     lines = []
     for r in refs:
         label = _freshness_label(r.avg_freshness)
-        imgs = training_counts.get(r.product_name, 0)
-        lines.append(f'  {r.product_name}: avg {r.avg_freshness:.1f}/{FRESHNESS_MAX} ({label}), seen {r.observations}x, last scored {r.last_freshness}/{FRESHNESS_MAX}, {imgs} training images saved')
+        lines.append(f'  {r.product_name}: avg {r.avg_freshness:.1f}/{FRESHNESS_MAX} ({label}), seen {r.observations}x, last scored {r.last_freshness}/{FRESHNESS_MAX}')
     return '\n\nYou have learned from previous scans. Use this data to improve accuracy:\n' + '\n'.join(lines) + "\nBe more precise for products you've seen many times.\n"
 
 def _clamp_freshness(val) -> int:
@@ -350,8 +327,12 @@ def _item_to_out(item: ScanItem) -> ScanItemOut:
             id_groups.append(IdentificationGroupOut(id=L.group.id, code=L.group.code, label=L.group.label))
     return ScanItemOut(id=item.id, name=item.name, freshness=item.freshness, qty=item.qty, unit=item.unit, confidence=item.confidence, source=item.source, alert=_freshness_alert(item.freshness), identification_groups=id_groups)
 
+def _session_recipe_to_out(r: SessionRecipe) -> SessionRecipeOut:
+    return SessionRecipeOut(id=r.id, session_id=r.session_id, name=r.name, uses=json.loads(r.uses_json), extra=json.loads(r.extra_json), steps=json.loads(r.steps_json), minutes=r.minutes, rating=r.rating, favorited=bool(r.favorited), created_at=cast(datetime, r.created_at))
+
+
 def _session_to_out(session: ScanSession) -> ScanSessionOut:
-    return ScanSessionOut(id=session.id, status=session.status, images=[ScanImageOut(id=img.id, mime=img.mime) for img in session.images], items=[_item_to_out(item) for item in session.items], recipes=[SessionRecipeOut(id=r.id, session_id=r.session_id, name=r.name, uses=json.loads(r.uses_json), extra=json.loads(r.extra_json), steps=json.loads(r.steps_json), minutes=r.minutes, rating=r.rating, created_at=cast(datetime, r.created_at)) for r in session.recipes], tip=session.tip, created_at=cast(datetime, session.created_at))
+    return ScanSessionOut(id=session.id, status=session.status, images=[ScanImageOut(id=img.id, mime=img.mime) for img in session.images], items=[_item_to_out(item) for item in session.items], recipes=[_session_recipe_to_out(r) for r in session.recipes], tip=session.tip, created_at=cast(datetime, session.created_at))
 MAX_SCAN_UPLOADS = 50
 
 @router.post('/sessions')
@@ -537,12 +518,6 @@ def confirm_session(session_id: int, user: User=Depends(get_current_user), db: S
     for scan_item in session.items:
         pantry = PantryItem(user_id=user.id, session_id=session.id, name=scan_item.name, freshness=scan_item.freshness, quantity=_pantry_quantity_from_qty(scan_item.qty), unit=scan_item.unit, source='scan', expires_at=_estimate_expires(scan_item.name))
         db.add(pantry)
-    for img in session.images:
-        if not img.thumbnail:
-            continue
-        train_b64 = _training_thumbnail_b64(img.thumbnail)
-        for scan_item in session.items:
-            db.add(TrainingImage(user_id=user.id, session_id=session.id, product_name=scan_item.name.strip().lower(), freshness=scan_item.freshness, image_data=train_b64, mime='image/jpeg', verified=True))
     _update_freshness_refs(db, [{'name': item.name, 'freshness': item.freshness} for item in session.items])
     session.status = 'confirmed'
     db.commit()
@@ -587,7 +562,7 @@ def generate_groq_recipes(session_id: int, user: User=Depends(get_current_user),
     db.commit()
     for rec in db_recipes:
         db.refresh(rec)
-    return GroqRecipesBatchOut(recipes=[SessionRecipeOut(id=rec.id, session_id=rec.session_id, name=rec.name, uses=json.loads(rec.uses_json), extra=json.loads(rec.extra_json), steps=json.loads(rec.steps_json), minutes=rec.minutes, rating=rec.rating, created_at=cast(datetime, rec.created_at)) for rec in db_recipes])
+    return GroqRecipesBatchOut(recipes=[_session_recipe_to_out(rec) for rec in db_recipes])
 
 @router.patch('/recipes/{recipe_id}', response_model=SessionRecipeOut)
 def rate_recipe(recipe_id: int, body: RateRequest, user: User=Depends(get_current_user), db: Session=Depends(get_db)):
@@ -597,7 +572,7 @@ def rate_recipe(recipe_id: int, body: RateRequest, user: User=Depends(get_curren
     recipe.rating = body.rating
     db.commit()
     db.refresh(recipe)
-    return SessionRecipeOut(id=recipe.id, session_id=recipe.session_id, name=recipe.name, uses=json.loads(recipe.uses_json), extra=json.loads(recipe.extra_json), steps=json.loads(recipe.steps_json), minutes=recipe.minutes, rating=recipe.rating, created_at=cast(datetime, recipe.created_at))
+    return _session_recipe_to_out(recipe)
 
 @router.get('/sessions/{session_id}/images/{image_id}')
 def get_image(session_id: int, image_id: int, user: User=Depends(get_current_user), db: Session=Depends(get_db)):
@@ -609,23 +584,119 @@ def get_image(session_id: int, image_id: int, user: User=Depends(get_current_use
         raise HTTPException(status_code=404, detail='Image not found.')
     return {'image': image.thumbnail, 'mime': image.mime}
 
-@router.get('/training/stats', response_model=TrainingStatsOut)
-def training_stats(user: User=Depends(get_current_user), db: Session=Depends(get_db)):
-    rows = db.execute(select(TrainingImage.product_name, func.count(TrainingImage.id), func.avg(TrainingImage.freshness), func.min(TrainingImage.freshness), func.max(TrainingImage.freshness)).where(TrainingImage.user_id == user.id).group_by(TrainingImage.product_name).order_by(func.count(TrainingImage.id).desc())).all()
-    products = [{'name': name, 'images': count, 'avg_freshness': round(avg, 1) if avg else 0, 'min_freshness': mn, 'max_freshness': mx} for name, count, avg, mn, mx in rows]
-    return TrainingStatsOut(total_images=sum((p['images'] for p in products)), unique_products=len(products), products=products)
+@router.post('/recipes/{recipe_id}/favorite', response_model=SessionRecipeOut)
+def favorite_session_recipe(recipe_id: int, user: User=Depends(get_current_user), db: Session=Depends(get_db)):
+    recipe = db.scalar(select(SessionRecipe).where(SessionRecipe.id == recipe_id, SessionRecipe.user_id == user.id))
+    if not recipe:
+        raise HTTPException(status_code=404, detail='Recipe not found.')
+    recipe.favorited = True
+    db.commit()
+    db.refresh(recipe)
+    return _session_recipe_to_out(recipe)
 
-@router.get('/training/images', response_model=list[TrainingImageOut])
-def list_training_images(product: str | None=Query(None), limit: int=Query(50, ge=1, le=200), offset: int=Query(0, ge=0), user: User=Depends(get_current_user), db: Session=Depends(get_db)):
-    stmt = select(TrainingImage).where(TrainingImage.user_id == user.id)
-    if product:
-        stmt = stmt.where(TrainingImage.product_name == product.strip().lower())
-    stmt = stmt.order_by(TrainingImage.created_at.desc()).offset(offset).limit(limit)
-    return list(db.scalars(stmt).all())
 
-@router.get('/training/images/{image_id}')
-def get_training_image(image_id: int, user: User=Depends(get_current_user), db: Session=Depends(get_db)):
-    img = db.scalar(select(TrainingImage).where(TrainingImage.id == image_id, TrainingImage.user_id == user.id))
-    if not img:
-        raise HTTPException(status_code=404, detail='Training image not found.')
-    return {'image': img.image_data, 'mime': img.mime, 'product': img.product_name, 'freshness': img.freshness}
+@router.delete('/recipes/{recipe_id}/favorite', response_model=SessionRecipeOut)
+def unfavorite_session_recipe(recipe_id: int, user: User=Depends(get_current_user), db: Session=Depends(get_db)):
+    recipe = db.scalar(select(SessionRecipe).where(SessionRecipe.id == recipe_id, SessionRecipe.user_id == user.id))
+    if not recipe:
+        raise HTTPException(status_code=404, detail='Recipe not found.')
+    recipe.favorited = False
+    db.commit()
+    db.refresh(recipe)
+    return _session_recipe_to_out(recipe)
+
+
+@router.get('/recipes/favorites', response_model=list[SessionRecipeOut])
+def list_favorite_session_recipes(limit: int=Query(50, ge=1, le=200), offset: int=Query(0, ge=0), user: User=Depends(get_current_user), db: Session=Depends(get_db)):
+    rows = db.scalars(select(SessionRecipe).where(SessionRecipe.user_id == user.id, SessionRecipe.favorited == True).order_by(SessionRecipe.created_at.desc()).offset(offset).limit(limit)).all()
+    return [_session_recipe_to_out(r) for r in rows]
+
+
+def _collect_user_group_pantry(db: Session, user_id: int) -> tuple[list[int], dict[tuple[str, str | None], dict]]:
+    group_ids = list(db.scalars(select(GroupMember.group_id).where(GroupMember.user_id == user_id)).all())
+    if not group_ids:
+        return [], {}
+    member_ids = list(db.scalars(select(GroupMember.user_id).where(GroupMember.group_id.in_(group_ids))).all())
+    if not member_ids:
+        return group_ids, {}
+    pantry_rows = list(db.scalars(select(PantryItem).where(PantryItem.user_id.in_(member_ids)).order_by(PantryItem.created_at.desc()).limit(500)).all())
+    user_to_groups: dict[int, list[int]] = {}
+    member_links = db.execute(select(GroupMember.user_id, GroupMember.group_id).where(GroupMember.group_id.in_(group_ids))).all()
+    for uid, gid in member_links:
+        user_to_groups.setdefault(uid, []).append(gid)
+    combined: dict[tuple[str, str | None], dict] = {}
+    for row in pantry_rows:
+        name = (row.name or '').strip().lower()
+        if not name:
+            continue
+        key = (name, row.unit)
+        slot = combined.setdefault(key, {'name': name, 'unit': row.unit, 'quantity': 0, 'group_ids': set()})
+        slot['quantity'] += int(row.quantity or 1)
+        for gid in user_to_groups.get(row.user_id, []):
+            slot['group_ids'].add(gid)
+    return group_ids, combined
+
+
+@router.get('/groups/combined-pantry', response_model=CombinedGroupSuggestionOut)
+def combined_group_pantry(user: User=Depends(get_current_user), db: Session=Depends(get_db)):
+    group_ids, combined = _collect_user_group_pantry(db, user.id)
+    items = [CombinedGroupItem(name=v['name'], unit=v['unit'], quantity=v['quantity'], group_ids=sorted(v['group_ids'])) for v in combined.values()]
+    items.sort(key=lambda i: (-i.quantity, i.name))
+    return CombinedGroupSuggestionOut(group_ids=sorted(group_ids), items=items, recipes=[])
+
+
+@router.post('/groups/combined-meal', response_model=CombinedGroupSuggestionOut)
+def combined_group_meal_suggestions(count: int=Query(3, ge=1, le=6), user: User=Depends(get_current_user), db: Session=Depends(get_db)):
+    if not groq_configured():
+        raise HTTPException(status_code=503, detail='Groq is not configured. Set GROQ_API_KEY.')
+    group_ids, combined = _collect_user_group_pantry(db, user.id)
+    items = [CombinedGroupItem(name=v['name'], unit=v['unit'], quantity=v['quantity'], group_ids=sorted(v['group_ids'])) for v in combined.values()]
+    items.sort(key=lambda i: (-i.quantity, i.name))
+    if not items:
+        raise HTTPException(status_code=400, detail='No pantry items found across your groups.')
+    items_text = ', '.join(f'{i.name} x{i.quantity}' if i.quantity > 1 else i.name for i in items[:60])
+    system = (
+        'You are a meal planner that combines pantry inventories from multiple households. '
+        'Use ONLY ingredients the user lists; never add anything new. Reply with strict JSON only.'
+    )
+    user_msg = (
+        f'These are the COMBINED pantry items from all the user\'s groups (ingredient + total quantity available). '
+        f'Suggest {count} creative shared meals that combine items from across the groups, prioritising perishable use. '
+        f'Each recipe must only use names from this list. Return strict JSON: '
+        f'{{"recipes":[{{"title":string,"description":string|null,"ingredients":[string],"steps":[string],"minutes":int|null}}]}}.\n'
+        f'Inventory: {items_text}'
+    )
+    try:
+        raw = groq_chat_json(system, user_msg, temperature=0.3, max_tokens=1500)
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f'Groq request failed: {e}') from e
+    try:
+        parsed = _parse_ai_json(raw)
+    except (json.JSONDecodeError, ValueError) as e:
+        raise HTTPException(status_code=502, detail=f'Invalid JSON from Groq: {e}') from e
+    raw_list = parsed.get('recipes') if isinstance(parsed, dict) else parsed
+    if not isinstance(raw_list, list):
+        raw_list = []
+    recipes_out: list[RecipeOut] = []
+    for entry in raw_list:
+        if not isinstance(entry, dict):
+            continue
+        title = str(entry.get('title') or entry.get('name') or '').strip()
+        if not title:
+            continue
+        ingredients = [str(x).strip() for x in (entry.get('ingredients') or entry.get('uses') or []) if str(x).strip()][:30]
+        steps = [str(x).strip() for x in (entry.get('steps') or []) if str(x).strip()][:20]
+        desc = entry.get('description')
+        minutes = entry.get('minutes')
+        try:
+            minutes = int(minutes) if minutes is not None else None
+        except (TypeError, ValueError):
+            minutes = None
+        rec = Recipe(title=title[:200], description=str(desc)[:2000] if isinstance(desc, str) else None, ingredients_json=json.dumps(ingredients), steps_json=json.dumps(steps))
+        db.add(rec)
+        db.flush()
+        recipes_out.append(RecipeOut(id=rec.id, title=rec.title, description=rec.description, ingredients=ingredients, steps=steps, starred=False))
+    db.commit()
+    return CombinedGroupSuggestionOut(group_ids=sorted(group_ids), items=items, recipes=recipes_out)

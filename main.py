@@ -93,6 +93,35 @@ def _upgrade_users_verification_sqlite(conn) -> None:
         conn.commit()
 
 
+def _upgrade_session_recipes_favorited(conn, dialect: str) -> None:
+    if dialect == 'postgresql':
+        if not conn.execute(text("SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='session_recipes'")).first():
+            return
+        cols = _pg_table_columns(conn, 'session_recipes')
+        if 'favorited' not in cols:
+            conn.execute(text('ALTER TABLE session_recipes ADD COLUMN favorited BOOLEAN NOT NULL DEFAULT false'))
+            conn.commit()
+    elif dialect == 'sqlite':
+        rows = conn.execute(text("PRAGMA table_info(session_recipes)")).fetchall()
+        if not rows:
+            return
+        cols = {r[1] for r in rows}
+        if 'favorited' not in cols:
+            conn.execute(text('ALTER TABLE session_recipes ADD COLUMN favorited BOOLEAN NOT NULL DEFAULT 0'))
+            conn.commit()
+
+
+def _drop_training_images(conn, dialect: str) -> None:
+    try:
+        if dialect == 'postgresql':
+            conn.execute(text('DROP TABLE IF EXISTS training_images CASCADE'))
+        else:
+            conn.execute(text('DROP TABLE IF EXISTS training_images'))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+
+
 @app.on_event('startup')
 def on_startup():
     if engine.dialect.name == 'postgresql':
@@ -113,9 +142,13 @@ def on_startup():
         with engine.connect() as conn:
             _upgrade_users_verification_postgres(conn)
             _upgrade_pantry_items_postgres(conn)
+            _upgrade_session_recipes_favorited(conn, 'postgresql')
+            _drop_training_images(conn, 'postgresql')
     elif engine.dialect.name == 'sqlite':
         with engine.connect() as conn:
             _upgrade_users_verification_sqlite(conn)
+            _upgrade_session_recipes_favorited(conn, 'sqlite')
+            _drop_training_images(conn, 'sqlite')
     with SessionLocal() as db:
         from identification_seed import ensure_identification_groups
         try:

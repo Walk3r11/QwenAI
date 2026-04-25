@@ -3,15 +3,15 @@ import json
 import re
 
 import requests
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from config import ENABLE_AI
 from db import get_db
 from groq_client import groq_chat_json, groq_configured
-from models import GroupMember, PantryItem, Recipe, RecipeFavorite, User
-from schemas import RecipeOut, RecipeSuggestRequest
+from models import GroupMember, PantryItem, Recipe, RecipeFavorite, SessionRecipe, User
+from schemas import RecipeOut, RecipeSuggestRequest, RecommendedRecipesOut
 from security import get_current_user
 
 router = APIRouter(prefix='/recipes', tags=['recipes'])
@@ -149,3 +149,87 @@ def list_favorites(db: Session=Depends(get_db), current_user: User=Depends(get_c
     q = select(Recipe).join(RecipeFavorite, RecipeFavorite.recipe_id == Recipe.id).where(RecipeFavorite.user_id == current_user.id).order_by(RecipeFavorite.created_at.desc())
     recipes = list(db.scalars(q).all())
     return [_recipe_to_out(r, starred=True) for r in recipes]
+
+
+def _user_top_products(db: Session, user_id: int, limit: int = 20) -> list[str]:
+    rows = db.execute(
+        select(PantryItem.name, func.count(PantryItem.id).label('c'))
+        .where(PantryItem.user_id == user_id)
+        .group_by(PantryItem.name)
+        .order_by(func.count(PantryItem.id).desc())
+        .limit(limit)
+    ).all()
+    seen: set[str] = set()
+    out: list[str] = []
+    for name, _ in rows:
+        key = (name or '').strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(name.strip())
+    return out
+
+
+def _generate_recommended(db: Session, user_id: int, products: list[str], count: int) -> list[Recipe]:
+    if not (ENABLE_AI and groq_configured() and products):
+        title = 'Quick Pantry Bowl'
+        rec = Recipe(
+            title=title,
+            description='Toss together what you have on hand for a quick, filling meal.',
+            ingredients_json=json.dumps(products[:8] or ['rice', 'vegetables', 'sauce']),
+            steps_json=json.dumps(['Cook a base (rice or pasta).', 'Add chopped pantry vegetables.', 'Season and serve warm.']),
+        )
+        db.add(rec)
+        db.commit()
+        db.refresh(rec)
+        return [rec]
+    system = (
+        'You are a creative home chef. Recommend recipes the user would enjoy based on their pantry history. '
+        'You may suggest a small number of common store-cupboard staples beyond the listed items, but keep it realistic.'
+        ' Reply with strict JSON only.'
+    )
+    user_msg = (
+        f'The user often cooks with these ingredients (most-used first): {", ".join(products)}.\n'
+        f'Suggest {count} appealing recipes mixing some of these items with a couple of nice new ideas. '
+        'Each recipe object: {"title":string,"description":string|null,"ingredients":[string],"steps":[string]}. '
+        'Return strict JSON only: {"recipes":[...]}'
+    )
+    try:
+        raw = groq_chat_json(system, user_msg, temperature=0.4, max_tokens=1500)
+        parsed = json.loads(_extract_json_text(raw))
+    except (RuntimeError, requests.RequestException, ValueError, json.JSONDecodeError):
+        return []
+    raw_list = parsed.get('recipes', []) if isinstance(parsed, dict) else []
+    out: list[Recipe] = []
+    for entry in raw_list[:count]:
+        if not isinstance(entry, dict):
+            continue
+        title = str(entry.get('title') or '').strip()
+        if not title:
+            continue
+        ingredients = [str(x).strip() for x in (entry.get('ingredients') or []) if str(x).strip()][:30]
+        steps = [str(x).strip() for x in (entry.get('steps') or []) if str(x).strip()][:20]
+        desc = entry.get('description')
+        rec = Recipe(
+            title=title[:200],
+            description=str(desc)[:2000] if isinstance(desc, str) else None,
+            ingredients_json=json.dumps(ingredients),
+            steps_json=json.dumps(steps),
+        )
+        db.add(rec)
+        out.append(rec)
+    if out:
+        db.commit()
+        for r in out:
+            db.refresh(r)
+    return out
+
+
+@router.get('/recommended', response_model=RecommendedRecipesOut)
+def recommended_recipes(count: int=Query(4, ge=1, le=8), db: Session=Depends(get_db), current_user: User=Depends(get_current_user)):
+    products = _user_top_products(db, current_user.id)
+    fav_recipe_ids = set(db.scalars(select(RecipeFavorite.recipe_id).where(RecipeFavorite.user_id == current_user.id)).all())
+    recipes = _generate_recommended(db, current_user.id, products, count)
+    return RecommendedRecipesOut(
+        based_on=products[:8],
+        recipes=[_recipe_to_out(r, starred=r.id in fav_recipe_ids) for r in recipes],
+    )
